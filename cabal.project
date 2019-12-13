@@ -1,0 +1,19 @@
+packages: .
+
+source-repository-package
+  type: git
+  location: https://github.com/input-output-hk/ouroboros-network
+  tag: c785fe64445357b806c847fa438fc7612563b42b
+  subdir: io-sim-classes
+
+source-repository-package
+  type: git
+  location: https://github.com/input-output-hk/ouroboros-network
+  tag: c785fe64445357b806c847fa438fc7612563b42b
+  subdir: io-sim
+
+source-repository-package
+  type: git
+  location: https://github.com/input-output-hk/iohk-monitoring-framework
+  subdir:   contra-tracer
+  tag: b310a4f0b7a80b54edfb094afd3def9eab035f46
