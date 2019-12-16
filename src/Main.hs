@@ -9,7 +9,6 @@ import Control.Monad.Class.MonadSay
 
 import Control.Monad (void)
 import Data.Time.Clock (secondsToDiffTime)
-import qualified Data.Map.Strict as Map
 
 import Channel
 import HeadNode
@@ -21,15 +20,9 @@ main = do
 
 twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m) => m ()
 twoNodesExample = do
+  node0 <- newNode (NodeId 0) (SendSingleTx (Tx (TxId 0) (secondsToDiffTime 1)))
+  node1 <- newNode (NodeId 1) (SendSingleTx (Tx (TxId 1) (secondsToDiffTime 1)))
   (cha, chb) <- createConnectedBoundedChannels 100
-  let node0 = HeadNode {
-        hnId = NodeId 0,
-        hnChannels = Map.fromList [(NodeId 1, cha)],
-        hnTxSendStrategy = SendSingleTx (Tx (TxId 0) (secondsToDiffTime 1))
-        }
-      node1 = HeadNode {
-        hnId = NodeId 1,
-        hnChannels = Map.fromList [(NodeId 0, chb)],
-        hnTxSendStrategy = SendSingleTx (Tx (TxId 1) (secondsToDiffTime 1))
-        }
+  addPeer node0 (NodeId 1) cha
+  addPeer node1 (NodeId 0) chb
   void $ concurrently (startNode node0) (startNode node1)
