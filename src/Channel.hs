@@ -4,6 +4,7 @@ module Channel where
 
 import Numeric.Natural
 
+-- imports from io-sim, io-sim-classes, contra-traceri
 import Control.Monad.Class.MonadSTM
 
 

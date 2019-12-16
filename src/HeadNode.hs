@@ -5,11 +5,14 @@ import Control.Monad (forever, forM_, void)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 
+-- imports from io-sim, io-sim-classes, contra-tracer
 import Control.Monad.Class.MonadAsync
 import Control.Monad.Class.MonadSTM
 import Control.Monad.Class.MonadSay
 import Control.Monad.Class.MonadTimer
+import Control.Tracer
 
+-- imports from this package
 import Channel
 import HeadProtocol
 
@@ -41,8 +44,9 @@ newNode nodeId txSendStrategy = do
     }
 
 startNode :: (MonadSTM m, MonadSay m, MonadTimer m, MonadAsync m) =>
-  HeadNode m -> m ()
-startNode hn = void $ concurrently (listener hn) (txSender hn)
+  Tracer m TraceProtocolEvent
+  -> HeadNode m -> m ()
+startNode tracer hn = void $ concurrently (listener tracer hn) (txSender tracer hn)
 
 -- | Add a peer, and install a thread that will collect messages from the
 -- channel to the main inbox of the node.
@@ -58,30 +62,30 @@ addPeer hn peerId peerChannel = do
       recv peerChannel >>= \case
         Nothing -> return ()
         Just message -> do
-          say $ concat ["Got message ", show message, " from ", show peerId]
           atomically $ writeTBQueue (hnInbox hn) (peerId, message)
 
 -- | This is for the actual logic of the node, processing incoming messages.
 listener :: (MonadSTM m, MonadSay m, MonadTimer m, MonadAsync m) =>
-  HeadNode m -> m ()
-listener hn = forever $ do
+  Tracer m TraceProtocolEvent
+  -> HeadNode m -> m ()
+listener tracer hn = forever $ do
   atomically (readTBQueue $ hnInbox hn) >>= \case
     (nodeId, RequestTxSignature tx) -> do
-      say $ concat ["Node ", show (hnId hn), " received ", show tx]
+      traceWith tracer $ TraceReceivedTxForSignature (txId tx) nodeId
       threadDelay (txValidationTime tx)
-      say $ concat ["Node ", show (hnId hn), " validated ", show tx]
       Map.lookup nodeId <$> atomically (readTVar (hnChannels hn)) >>= \case
         Just ch -> send ch $ ProvideTxSignature (tx, hnId hn)
         Nothing -> error "This should not happen."
     (_, ProvideTxSignature (tx, nodeId)) ->
-      say $ concat ["got confirmation for ", show tx, " from ", show nodeId]
+      traceWith tracer $ TraceReceivedSignatureForTx (txId tx) nodeId
 
 txSender :: (MonadAsync m, MonadSay m) =>
-  HeadNode m -> m ()
-txSender hn = case (hnTxSendStrategy hn) of
+  Tracer m TraceProtocolEvent
+  ->   HeadNode m -> m ()
+txSender tracer hn = case (hnTxSendStrategy hn) of
   SendSingleTx tx ->  do
     channelList <- Map.toList <$> atomically (readTVar (hnChannels hn))
     forM_ channelList $ \(nodeId, ch) -> do
-      say $ concat ["sending ", show tx, " from ", show (hnId hn), " to ", show nodeId]
+      traceWith tracer $ TraceSentTxForSignature (txId tx) nodeId
       send ch $ RequestTxSignature tx
   SendNoTx -> return ()

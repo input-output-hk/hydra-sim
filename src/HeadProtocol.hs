@@ -14,7 +14,6 @@ data Tx = Tx {
 newtype NodeId = NodeId Int
   deriving (Show, Ord, Eq)
 
-
 data HeadProtocol =
   -- | Send a message to another HeadNode, to request a signature.
     RequestTxSignature Tx
@@ -22,3 +21,9 @@ data HeadProtocol =
   -- who has signed a transaction.
   | ProvideTxSignature (Tx, NodeId)
   deriving (Show, Eq)
+
+data TraceProtocolEvent =
+    TraceSentTxForSignature TxId NodeId
+  | TraceReceivedTxForSignature TxId NodeId
+  | TraceReceivedSignatureForTx TxId NodeId
+  deriving (Eq, Show)
