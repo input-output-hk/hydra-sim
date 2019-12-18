@@ -96,10 +96,8 @@ data TraceHydraEvent =
 
 -- | Tracing messages that are sent/received between nodes.
 data TraceMessagingEvent =
-    TMSentTxForSignature TxId NodeId
-  | TMReceivedTxForSignature TxId NodeId
-  | TMReceivedSignatureForTx TxId NodeId
-  | TMReceivedAcknowledgedTx TxId
+    TraceMessageSent NodeId HeadProtocol
+  | TraceMessageReceived NodeId HeadProtocol
   deriving (Eq, Show)
 
 -- | Tracing how the node state changes as transactions are acknowledged, and

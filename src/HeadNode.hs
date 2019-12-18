@@ -74,19 +74,9 @@ listener :: forall m . (MonadSTM m, MonadSay m, MonadTimer m, MonadAsync m) =>
   Tracer m TraceHydraEvent
   -> HeadNode m -> m ()
 listener tracer hn = forever $ do
-  atomically (readTBQueue $ hnInbox hn) >>= \case
-    (_, RequestTxSignature tx nodeId) -> do
-      traceWith messageTracer $ TMReceivedTxForSignature (txId tx) nodeId
-      threadDelay (txValidationTime tx)
-      (Map.lookup nodeId) . hsChannels <$> atomically (readTVar (hnState hn)) >>= \case
-        Just ch -> send ch $ ProvideTxSignature (txId tx) (hnId hn)
-        Nothing -> error "This should not happen."
-    (_, ms@(ProvideTxSignature txid nodeId)) -> do
-      traceWith messageTracer $ TMReceivedSignatureForTx txid nodeId
-      applyMessage ms
-    (_, ms@(ShowAcknowledgedTx tx)) -> do
-      traceWith messageTracer $ TMReceivedAcknowledgedTx (txId tx)
-      applyMessage ms
+  atomically (readTBQueue $ hnInbox hn) >>= \(peer, ms) -> do
+    traceWith messageTracer (TraceMessageReceived peer ms)
+    applyMessage ms
 
   where messageTracer = contramap HydraMessage tracer
         protocolTracer = contramap HydraProtocol tracer
@@ -94,7 +84,7 @@ listener tracer hn = forever $ do
         applyMessage ms = do
           decision <- atomically $ do
             s <- readTVar (hnState hn)
-            let decision = handleMessage s ms :: Decision m
+            let decision = handleMessage (hnId hn) s ms :: Decision m
             writeTVar (hnState hn) (decisionState decision)
             return (decision)
           traceWith protocolTracer (decisionTrace decision)
@@ -105,10 +95,18 @@ listener tracer hn = forever $ do
 
 
 -- | This is the actual logic of the proto
-handleMessage :: Monad m => HStateTransformer m
+handleMessage :: MonadTimer m => NodeId -> HStateTransformer m
+
+handleMessage nodeId s (RequestTxSignature tx peer) =
+  Decision s TPNoOp $ do
+    threadDelay (txValidationTime tx)
+    case (Map.lookup peer) . hsChannels $ s of
+      Just ch -> send ch $ ProvideTxSignature (txId tx) nodeId
+      Nothing -> error "This should not happen."
+    return Nothing
 
 -- Getting acknowledgement for a transaction from a peer
-handleMessage s (ProvideTxSignature txid peer) =
+handleMessage _nodeId s (ProvideTxSignature txid peer) =
   case txid `Map.lookup` hsTxs s of
     Nothing -> Decision
       s
@@ -122,7 +120,8 @@ handleMessage s (ProvideTxSignature txid peer) =
       Decision s (TPInvalidTransition $ "Tried to add signature for " ++ show txid ++ " which is already stable.")
                (return Nothing)
 
-handleMessage s (CheckAcknowledgement txid) = 
+-- Check whether a tx has been confirmed by everyone
+handleMessage _nodeId s (CheckAcknowledgement txid) =
   case txid `Map.lookup` hsTxs s of
     Nothing -> Decision
       s
@@ -138,21 +137,26 @@ handleMessage s (CheckAcknowledgement txid) =
                s
                TPNoOp
                (return Nothing)
+    Just (_, AcknowledgedFully) -> Decision s TPNoOp (return Nothing)
 
 -- Receiving a tx, with multi-sig from everyone
-handleMessage s (ShowAcknowledgedTx tx) =
+handleMessage _nodeId s (ShowAcknowledgedTx tx) =
   Decision
     (s {hsTxs = Map.insert (txId tx) (tx, AcknowledgedFully) (hsTxs s)})
     (TPTxStable (txId tx))
     (return Nothing)
 
--- handleMessage s _ = Decision s [] (return Nothing)
-
 -- | Send a message to all peers
-broadcast :: Monad m => HState m -> HeadProtocol -> m ()
+broadcast :: Monad m
+  => HState m
+  -> HeadProtocol
+  -> m ()
 broadcast s ms =
-  forM_ (Map.toList $ hsChannels s) $ \(_nodeId, ch) ->
-     send ch ms
+  forM_ (Map.toList $ hsChannels s) $ \(_nodeId, ch) -> do
+    -- TODO: I'd like to do a "traceWith tracer $ TraceMessageSent nodeId ms"
+    -- here, but then I'd need to have that tracer passed to the decisionJob,
+    -- which feels a bit weird.
+    send ch ms
 
 txSender :: (MonadAsync m, MonadSay m) =>
   Tracer m TraceHydraEvent
@@ -162,7 +166,10 @@ txSender tracer hn = case (hnTxSendStrategy hn) of
     atomically $ modifyTVar (hnState hn) $ \s -> s { hsTxs = Map.insert (txId tx) (tx, AcknowledgedPartly Set.empty) (hsTxs s)}
     channelList <- Map.toList . hsChannels <$> atomically (readTVar (hnState hn))
     forM_ channelList $ \(nodeId, ch) -> do
-      traceWith messageTracer $ TMSentTxForSignature (txId tx) nodeId
+      traceWith messageTracer $ TraceMessageSent nodeId $ RequestTxSignature tx (hnId hn)
       send ch $ RequestTxSignature tx (hnId hn)
+    -- TODO: I'd like to replace that with the following, but then I'd also have
+    -- to get tracing to broadcast. s <- atomically $ readTVar (hnState hn)
+    -- broadcast s $ RequestTxSignature tx (hnId hn)
   SendNoTx -> return ()
   where messageTracer = contramap HydraMessage tracer
