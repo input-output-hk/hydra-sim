@@ -102,7 +102,7 @@ handleMessage nodeId s (RequestTxSignature tx peer) =
     threadDelay (txValidationTime tx)
     case (Map.lookup peer) . hsChannels $ s of
       Just ch -> send ch $ ProvideTxSignature (txId tx) nodeId
-      Nothing -> error "This should not happen."
+      Nothing -> error $ concat ["Error in ", show nodeId, ": Did not find peer ", show peer, " in ", show . Map.keys . hsChannels $ s]
     return Nothing
 
 -- Getting acknowledgement for a transaction from a peer
