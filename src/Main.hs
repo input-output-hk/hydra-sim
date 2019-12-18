@@ -18,13 +18,13 @@ import Control.Monad.Class.MonadSay
 -- imports from this package
 import Channel
 import HeadNode
-import HeadProtocol
+import HeadNode.Types
 
 dynamicTracer :: Typeable a => Tracer (SimM s) a
 dynamicTracer = Tracer traceM
 
-selectTraceProtocolEvents :: Trace a -> [(Time, ThreadId (SimM s), TraceProtocolEvent)]
-selectTraceProtocolEvents = go
+selectTraceHydraEvents :: Trace a -> [(Time, ThreadId (SimM s), TraceHydraEvent)]
+selectTraceHydraEvents = go
   where
     go (Trace t tid _ (EventLog e) trace)
      | Just x <- fromDynamic e    = (t,tid,x) : go trace
@@ -40,11 +40,11 @@ main = do
   putStrLn "full trace: "
   print trace
   putStrLn "trace of TraceProtocolEvent:"
-  print $ selectTraceProtocolEvents trace
+  print $ selectTraceHydraEvents trace
 
 
 twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
-  => Tracer m TraceProtocolEvent
+  => Tracer m TraceHydraEvent
   -> m ()
 twoNodesExample tracer = do
   node0 <- newNode (NodeId 0) (SendSingleTx (Tx (TxId 0) (secondsToDiffTime 1)))
