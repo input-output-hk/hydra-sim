@@ -24,6 +24,7 @@ executable hydra-sim
                      , HeadNode.Types
                      , Object
                      , Snapshot.Mock
+                     , Snapshot.Simple
                      , Tx.Mock
   -- other-extensions:
   build-depends:       base >=4.12 && <4.13
