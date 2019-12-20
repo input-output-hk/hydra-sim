@@ -19,11 +19,13 @@ import Control.Monad.Class.MonadSay
 import Channel
 import HeadNode
 import HeadNode.Types
+import Tx.Mock
+import Snapshot.Mock
 
 dynamicTracer :: Typeable a => Tracer (SimM s) a
 dynamicTracer = Tracer traceM
 
-selectTraceHydraEvents :: Trace a -> [(Time, ThreadId (SimM s), TraceHydraEvent)]
+selectTraceHydraEvents :: Trace a -> [(Time, ThreadId (SimM s), TraceHydraEvent (TxOrSnapshot MTx MSn))]
 selectTraceHydraEvents = go
   where
     go (Trace t tid _ (EventLog e) trace)
@@ -36,19 +38,19 @@ selectTraceHydraEvents = go
 main :: IO ()
 main = do
   let tracer = dynamicTracer
+  let trace = runSimTrace (threeNodesExample tracer)
   putStrLn "full trace: "
   print trace
-  let trace = runSimTrace (threeNodesExample tracer)
   putStrLn "trace of TraceProtocolEvent:"
   print $ selectTraceHydraEvents trace
 
 
 twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
-  => Tracer m TraceHydraEvent
+  => Tracer m (TraceHydraEvent (TxOrSnapshot MTx MSn))
   -> m ()
 twoNodesExample tracer = do
-  node0 <- newNode (NodeId 0) (SendSingleTx (Tx (TxId 0) (secondsToDiffTime 1)))
-  node1 <- newNode (NodeId 1) (SendSingleTx (Tx (TxId 1) (secondsToDiffTime 1)))
+  node0 <- newNode (NodeId 0) (MTxVC ()) (MSnVC ()) (SendSingleTx (MTx (TxId 0) (secondsToDiffTime 1)))
+  node1 <- newNode (NodeId 1) (MTxVC ()) (MSnVC ()) (SendSingleTx (MTx (TxId 1) (secondsToDiffTime 1)))
   (cha, chb) <- createConnectedBoundedChannels 100
   addPeer node0 (NodeId 1) cha
   addPeer node1 (NodeId 0) chb
@@ -56,12 +58,12 @@ twoNodesExample tracer = do
 
 
 threeNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
-  => Tracer m TraceHydraEvent
+  => Tracer m (TraceHydraEvent(TxOrSnapshot MTx MSn))
   -> m ()
 threeNodesExample tracer = do
-  node0 <- newNode (NodeId 0) (SendSingleTx (Tx (TxId 0) (secondsToDiffTime 1)))
-  node1 <- newNode (NodeId 1) (SendSingleTx (Tx (TxId 1) (secondsToDiffTime 1)))
-  node2 <- newNode (NodeId 2) (SendSingleTx (Tx (TxId 2) (secondsToDiffTime 1)))
+  node0 <- newNode (NodeId 0) (MTxVC ()) (MSnVC ()) (SendSingleTx (MTx (TxId 0) (secondsToDiffTime 1)))
+  node1 <- newNode (NodeId 1) (MTxVC ()) (MSnVC ()) (SendSingleTx (MTx (TxId 1) (secondsToDiffTime 1)))
+  node2 <- newNode (NodeId 2) (MTxVC ()) (MSnVC ()) (SendSingleTx (MTx (TxId 2) (secondsToDiffTime 1)))
   (ch01, ch10) <- createConnectedBoundedChannels 100
   (ch02, ch20) <- createConnectedBoundedChannels 100
   (ch12, ch21) <- createConnectedBoundedChannels 100

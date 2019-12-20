@@ -20,7 +20,11 @@ executable hydra-sim
   main-is:             Main.hs
   other-modules:       Channel
                      , HeadNode
+                     , HeadNode.Snapshot
                      , HeadNode.Types
+                     , Object
+                     , Snapshot.Mock
+                     , Tx.Mock
   -- other-extensions:
   build-depends:       base >=4.12 && <4.13
                      , contra-tracer

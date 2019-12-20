@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module HeadNode where
 
-import Control.Monad (forever, forM_, void)
+import Control.Monad (forever, forM_, void, when)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
@@ -17,24 +17,30 @@ import Control.Tracer
 -- imports from this package
 import Channel
 import HeadNode.Types
+import Object
 
-data TxSendStrategy =
+data TxSendStrategy tx =
     SendNoTx
-  | SendSingleTx Tx
+  | SendSingleTx tx
   deriving (Show, Eq)
 
-data HeadNode m = HeadNode {
+data (Object tx, Object sn) => HeadNode m tx sn = HeadNode {
   hnId :: NodeId,
-  hnState :: TVar m (HState m),
-  hnInbox :: TBQueue m (NodeId, HeadProtocol),
+  hnState :: TVar m (HState m tx sn),
+  hnInbox :: TBQueue m (NodeId, HeadProtocol (TxOrSnapshot tx sn)),
   hnPeerHandlers :: TVar m (Map NodeId (Async m ())),
-  hnTxSendStrategy :: TxSendStrategy
+  hnTxSendStrategy :: TxSendStrategy tx
   }
 
-newNode :: MonadSTM m =>
-  NodeId -> TxSendStrategy -> m (HeadNode m)
-newNode nodeId txSendStrategy = do
-  state <- newTVarM hnStateEmpty
+newNode :: (MonadSTM m, Object tx, Object sn) =>
+  NodeId
+  -> OValidationContext tx
+  -> OValidationContext sn
+  -> TxSendStrategy tx
+  -> m (HeadNode m tx sn)
+newNode nodeId vcTx vcSn txSendStrategy
+  = do
+  state <- newTVarM (hnStateEmpty (TOSVC vcTx vcSn))
   inbox <- atomically $ newTBQueue 100 -- TODO: make this configurable
   handlers <- newTVarM Map.empty
   return $ HeadNode {
@@ -45,15 +51,17 @@ newNode nodeId txSendStrategy = do
     hnTxSendStrategy = txSendStrategy
     }
 
-startNode :: (MonadSTM m, MonadSay m, MonadTimer m, MonadAsync m) =>
-  Tracer m TraceHydraEvent
-  -> HeadNode m -> m ()
+startNode
+  :: (MonadSTM m, MonadSay m, MonadTimer m, MonadAsync m
+     , Object tx, Object sn)
+  => Tracer m (TraceHydraEvent (TxOrSnapshot tx sn))
+  -> HeadNode m tx sn -> m ()
 startNode tracer hn = void $ concurrently (listener tracer hn) (txSender tracer hn)
 
 -- | Add a peer, and install a thread that will collect messages from the
 -- channel to the main inbox of the node.
-addPeer :: (MonadSTM m, MonadAsync m, MonadSay m) =>
-  HeadNode m -> NodeId -> Channel m HeadProtocol -> m ()
+addPeer :: (MonadSTM m, MonadAsync m, MonadSay m, Object tx, Object sn) =>
+  HeadNode m tx sn -> NodeId -> Channel m (HeadProtocol (TxOrSnapshot tx sn)) -> m ()
 addPeer hn peerId peerChannel = do
   peerHandler <- async protocolHandler
   atomically $ do
@@ -70,9 +78,12 @@ addPeer hn peerId peerChannel = do
           atomically $ writeTBQueue (hnInbox hn) (peerId, message)
 
 -- | This is for the actual logic of the node, processing incoming messages.
-listener :: forall m . (MonadSTM m, MonadSay m, MonadTimer m, MonadAsync m) =>
-  Tracer m TraceHydraEvent
-  -> HeadNode m -> m ()
+listener
+  :: forall m tx sn
+     . (MonadSTM m, MonadSay m, MonadTimer m, MonadAsync m
+       , Object tx, Object sn)
+  => Tracer m (TraceHydraEvent (TxOrSnapshot tx sn))
+  -> HeadNode m tx sn -> m ()
 listener tracer hn = forever $ do
   atomically (readTBQueue $ hnInbox hn) >>= \(peer, ms) -> do
     traceWith messageTracer (TraceMessageReceived peer ms)
@@ -80,11 +91,11 @@ listener tracer hn = forever $ do
 
   where messageTracer = contramap HydraMessage tracer
         protocolTracer = contramap HydraProtocol tracer
-        applyMessage :: HeadProtocol -> m ()
+        applyMessage :: HeadProtocol (TxOrSnapshot tx sn) -> m ()
         applyMessage ms = do
           decision <- atomically $ do
             s <- readTVar (hnState hn)
-            let decision = handleMessage (hnId hn) s ms :: Decision m
+            let decision = handleMessage (hnId hn) s ms :: Decision m tx sn
             writeTVar (hnState hn) (decisionState decision)
             return (decision)
           traceWith protocolTracer (decisionTrace decision)
@@ -95,61 +106,73 @@ listener tracer hn = forever $ do
 
 
 -- | This is the actual logic of the proto
-handleMessage :: MonadTimer m => NodeId -> HStateTransformer m
+handleMessage
+  :: (Object tx, Object sn , MonadTimer m)
+  => NodeId -> HStateTransformer m tx sn
 
-handleMessage nodeId s (RequestTxSignature tx peer) =
+handleMessage nodeId s (HPSigReq peer o) =
   Decision s TPNoOp $ do
-    threadDelay (txValidationTime tx)
-    case (Map.lookup peer) . hsChannels $ s of
-      Just ch -> send ch $ ProvideTxSignature (txId tx) nodeId
+    let (validity, mdelay) = oValidate (hsValidationContext s) o
+    case mdelay of
+      Just delay -> threadDelay delay
+      Nothing -> return ()
+    when (validity == ObjectValid) $ case (Map.lookup peer) . hsChannels $ s of
+      Just ch -> send ch $ HPSigAck (oRef o) nodeId
       Nothing -> error $ concat ["Error in ", show nodeId, ": Did not find peer ", show peer, " in ", show . Map.keys . hsChannels $ s]
     return Nothing
 
 -- Getting acknowledgement for a transaction from a peer
-handleMessage _nodeId s (ProvideTxSignature txid peer) =
+handleMessage _nodeId s (HPSigAck oref@(TOSRTx txid) peer) =
   case txid `Map.lookup` hsTxs s of
     Nothing -> Decision
       s
       (TPInvalidTransition $ "Tried to add signature for " ++ show txid ++ " which is not known.")
       (return Nothing)
-    Just (tx, AcknowledgedPartly peers) -> Decision
-      (s {hsTxs = Map.insert txid (tx, AcknowledgedPartly (peer `Set.insert` peers)) (hsTxs s)})
-      (TPTxAcknowledged txid peer)
-      (return (Just $ CheckAcknowledgement txid))
-    Just (_tx, AcknowledgedFully) ->
+    Just (tx, Acknowledged peers) -> Decision
+      (s {hsTxs = Map.insert txid (tx, Acknowledged (peer `Set.insert` peers)) (hsTxs s)})
+      (TPAck oref peer)
+      (return (Just $ CheckAcknowledgement oref))
+    Just (_tx, Confirmed) ->
       Decision s (TPInvalidTransition $ "Tried to add signature for " ++ show txid ++ " which is already stable.")
                (return Nothing)
 
 -- Check whether a tx has been confirmed by everyone
-handleMessage _nodeId s (CheckAcknowledgement txid) =
+handleMessage _nodeId s (CheckAcknowledgement oref@(TOSRTx txid)) =
   case txid `Map.lookup` hsTxs s of
     Nothing -> Decision
       s
       (TPInvalidTransition $ "Tried to check whether " ++ show txid ++ " is acknowledged, but couldn't find it.")
       (return Nothing)
-    Just (tx, AcknowledgedPartly peers) ->
+    Just (tx, Acknowledged peers) ->
       if peers == hsPeers s
         then Decision
-               (s {hsTxs = Map.insert txid (tx, AcknowledgedFully) (hsTxs s)})
-               (TPTxStable txid)
-               (broadcast s (ShowAcknowledgedTx tx) >> return Nothing)
+               (s {hsTxs = Map.insert txid (tx, Confirmed) (hsTxs s)})
+               (TPConf oref)
+               (broadcast s (HPSigConf (TOSTx tx)) >> return Nothing)
         else Decision
                s
                TPNoOp
                (return Nothing)
-    Just (_, AcknowledgedFully) -> Decision s TPNoOp (return Nothing)
+    Just (_, Confirmed) -> Decision s TPNoOp (return Nothing)
 
 -- Receiving a tx, with multi-sig from everyone
-handleMessage _nodeId s (ShowAcknowledgedTx tx) =
+handleMessage _nodeId s (HPSigConf (TOSTx tx)) =
   Decision
-    (s {hsTxs = Map.insert (txId tx) (tx, AcknowledgedFully) (hsTxs s)})
-    (TPTxStable (txId tx))
+    (s {hsTxs = Map.insert (oRef tx) (tx, Confirmed) (hsTxs s)})
+    (TPConf (TOSRTx $ oRef tx))
     (return Nothing)
 
+-- TODO: implement those
+handleMessage _nodeId _s (HPSigAck (TOSRSn _ ) _peer) = undefined
+handleMessage _nodeId _s (HPSigConf (TOSSn _ )) = undefined
+handleMessage _nodeId _s (CheckAcknowledgement (TOSRSn _ )) = undefined
+
+
 -- | Send a message to all peers
-broadcast :: Monad m
-  => HState m
-  -> HeadProtocol
+broadcast
+  :: (Object tx, Object sn, Monad m)
+  => HState m tx sn
+  -> HeadProtocol (TxOrSnapshot tx sn)
   -> m ()
 broadcast s ms =
   forM_ (Map.toList $ hsChannels s) $ \(_nodeId, ch) -> do
@@ -158,16 +181,17 @@ broadcast s ms =
     -- which feels a bit weird.
     send ch ms
 
-txSender :: (MonadAsync m, MonadSay m) =>
-  Tracer m TraceHydraEvent
-  -> HeadNode m -> m ()
+txSender
+  :: (Object tx, Object sn, MonadAsync m, MonadSay m)
+  => Tracer m (TraceHydraEvent (TxOrSnapshot tx sn))
+  -> HeadNode m tx sn -> m ()
 txSender tracer hn = case (hnTxSendStrategy hn) of
   SendSingleTx tx ->  do
-    atomically $ modifyTVar (hnState hn) $ \s -> s { hsTxs = Map.insert (txId tx) (tx, AcknowledgedPartly Set.empty) (hsTxs s)}
+    atomically $ modifyTVar (hnState hn) $ \s -> s { hsTxs = Map.insert (oRef tx) (tx, Acknowledged Set.empty) (hsTxs s)}
     channelList <- Map.toList . hsChannels <$> atomically (readTVar (hnState hn))
     forM_ channelList $ \(nodeId, ch) -> do
-      traceWith messageTracer $ TraceMessageSent nodeId $ RequestTxSignature tx (hnId hn)
-      send ch $ RequestTxSignature tx (hnId hn)
+      traceWith messageTracer $ TraceMessageSent nodeId $ HPSigReq (hnId hn) (TOSTx tx)
+      send ch $ HPSigReq (hnId hn) (TOSTx tx)
     -- TODO: I'd like to replace that with the following, but then I'd also have
     -- to get tracing to broadcast. s <- atomically $ readTVar (hnState hn)
     -- broadcast s $ RequestTxSignature tx (hnId hn)
