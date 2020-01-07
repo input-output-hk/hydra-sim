@@ -1,43 +1,34 @@
 module HeadNode.Types where
 
-import Data.Time.Clock (DiffTime)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 
 import Channel
-
--- Transactions
-
-newtype TxId = TxId Int
-  deriving (Show, Eq, Ord)
-
-data Tx = Tx {
-  txId :: TxId,
-  txValidationTime :: DiffTime
-  }
-  deriving (Show, Ord, Eq)
+import Tx.Class
 
 -- Nodes
 
-data HState m = HState {
+data Tx tx => HState m tx = HState {
   -- | All the members of the head, excluding this one.
   --
-  -- We assume that our acknowledgement is implied for evry tx and snapshot we
+  -- We assume that our acknowledgement is implied for every tx and snapshot we
   -- know about.
   hsPeers :: Set NodeId,
   -- | Transactions that we try to get confirmation on.
-  hsTxs :: Map TxId (Tx, Acknowledgement),
+  hsTxs :: Map (TxRef tx) (tx, Acknowledgement),
   -- | Channels for communication with peers.
-  hsChannels :: (Map NodeId (Channel m HeadProtocol))
+  hsChannels :: (Map NodeId (Channel m (HeadProtocol tx))),
+  hsUtXOConf :: Set (TxInput tx)
   }
 
-hnStateEmpty :: HState m
+hnStateEmpty :: Tx tx => HState m tx
 hnStateEmpty = HState {
   hsPeers = Set.empty,
   hsTxs = Map.empty,
-  hsChannels = Map.empty
+  hsChannels = Map.empty,
+  hsUtXOConf = Set.empty
   }
 
 
@@ -59,54 +50,54 @@ data Acknowledgement =
 
 -- Protocol Stuff
 
-data HeadProtocol =
+data Tx tx => HeadProtocol tx =
   -- | Request to send a signature for a transaction to a given node
-    RequestTxSignature Tx NodeId
+    RequestTxSignature tx NodeId
   -- | Respond to a signature request. We jut use the NodeId to keep track of
   -- who has signed a transaction.
-  | ProvideTxSignature TxId NodeId
+  | ProvideTxSignature (TxRef tx) NodeId
   -- | Show a Tx with a multi-sig of every participant.
-  | ShowAcknowledgedTx Tx
+  | ShowAcknowledgedTx tx
   -- | Note to self, to check whether a message is already acknowledged by
   -- everyone else.
-  | CheckAcknowledgement TxId
+  | CheckAcknowledgement (TxRef tx)
   deriving (Show, Eq)
 
 -- | Decision of the node what to do in response to a message
-data Decision m = Decision {
+data Decision m tx = Decision {
   -- | Updated state of the node, to be applied immediately
-  decisionState :: HState m,
+  decisionState :: HState m tx,
   -- | Trace of the decision
-  decisionTrace :: TraceProtocolEvent,
+  decisionTrace :: TraceProtocolEvent tx,
   -- | Optional action to perform, concurrently, after updating the state. This
   -- can result in another 'HeadProtocol' message, which will be applied to the
   -- node itself.
-  decisionJob :: m (Maybe HeadProtocol)
+  decisionJob :: m (Maybe (HeadProtocol tx))
   }
 
 -- | A function that encodes the logic of the protocol. It takes a state and a message, and produces a pair containing the new state, and a list of events to be traced.
-type HStateTransformer m = HState m -> HeadProtocol -> Decision m
+type HStateTransformer m tx = HState m tx -> HeadProtocol tx -> Decision m tx
 
 -- Traces
 
-data TraceHydraEvent =
-    HydraMessage TraceMessagingEvent
-  | HydraProtocol TraceProtocolEvent
+data TraceHydraEvent tx =
+    HydraMessage (TraceMessagingEvent tx)
+  | HydraProtocol (TraceProtocolEvent tx)
   deriving (Eq, Show)
 
 -- | Tracing messages that are sent/received between nodes.
-data TraceMessagingEvent =
-    TraceMessageSent NodeId HeadProtocol
-  | TraceMessageReceived NodeId HeadProtocol
+data TraceMessagingEvent tx =
+    TraceMessageSent NodeId (HeadProtocol tx)
+  | TraceMessageReceived NodeId (HeadProtocol tx)
   deriving (Eq, Show)
 
 -- | Tracing how the node state changes as transactions are acknowledged, and
 -- snapshots are produced.
-data TraceProtocolEvent =
+data Tx tx => TraceProtocolEvent tx =
   -- | A transaction has been acknowledged by a node.
-    TPTxAcknowledged TxId NodeId
+    TPTxAcknowledged (TxRef tx) NodeId
   -- | A transaction has become stable (i.e., acknowledged by all the nodes).
-  | TPTxStable TxId
+  | TPTxStable (TxRef tx)
   -- | We tried a transition that failed to alter the state.
   | TPInvalidTransition String
   -- | Transition was valid, but had no effect
