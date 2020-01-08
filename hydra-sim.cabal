@@ -24,6 +24,7 @@ executable hydra-sim
                      , HeadNode.Types
                      , Tx.Class
                      , Tx.Mock
+                     , MSig.Mock
   -- other-extensions:
   build-depends:       base >=4.12 && <4.13
                      , contra-tracer

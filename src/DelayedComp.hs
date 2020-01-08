@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveFunctor #-}
 module DelayedComp
-  ( DelayedComp,
+  ( DelayedComp (..),
 
     delayedComp, promptComp,
     runComp
@@ -8,7 +8,6 @@ module DelayedComp
 
 import Control.Monad (liftM2)
 import Data.Time.Clock (DiffTime)
-
 
 import Control.Monad.Class.MonadTimer
 
@@ -26,12 +25,13 @@ data DelayedComp a = DelayedComp
 
 instance Applicative DelayedComp where
   pure = promptComp
-  (DelayedComp f d) <*> (DelayedComp x d') = DelayedComp (f x) (liftM2 (+) d d')
+  (DelayedComp f d) <*> (DelayedComp x d') = DelayedComp (f x) (addMaybes d d')
 
 instance Monad DelayedComp where
   (DelayedComp x d) >>= f =
     let (DelayedComp x' d') = f x
-    in DelayedComp x' (liftM2 (+) d d')
+    in DelayedComp x' (addMaybes d d')
+  (DelayedComp _x d) >> (DelayedComp x' d') = DelayedComp x' (addMaybes d d')
 
 -- | A computation that produces a given value after a given time.
 delayedComp :: a -> DiffTime -> DelayedComp a
@@ -45,3 +45,9 @@ promptComp x = DelayedComp x Nothing
 runComp :: MonadTimer m => DelayedComp a -> m a
 runComp (DelayedComp x (Just d)) = threadDelay d >> pure x
 runComp (DelayedComp x Nothing) = pure x
+
+addMaybes :: Num a => Maybe a -> Maybe a -> Maybe a
+addMaybes Nothing Nothing = Nothing
+addMaybes (Just x) Nothing = Just x
+addMaybes Nothing (Just x) = Just x
+addMaybes (Just x) (Just x') = Just (x + x')
