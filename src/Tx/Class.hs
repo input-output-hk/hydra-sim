@@ -37,11 +37,13 @@ class (Eq (TxRef tx), Ord (TxRef tx), Show (TxRef tx),
   txValidate :: Set (TxInput tx) -> tx -> DelayedComp Bool
   txValidate utxo tx = promptComp $ txi tx `Set.isSubsetOf` utxo
 
+  -- | Apply a transaction that is known to be valid.
+  txApplyValid :: Set (TxInput tx) -> tx -> Set (TxInput tx)
+  txApplyValid utxo tx = (utxo Set.\\ txi tx) `Set.union` txo tx
+
   -- | Apply a transaction to a utxo set (including validating the transaction
   -- against that utxo set).
   txApply :: Set (TxInput tx) -> tx -> DelayedComp (Maybe (Set (TxInput tx)))
   txApply utxo tx = txValidate utxo tx >>= \case
     False -> return Nothing
-    True -> return . Just $ (utxo Set.\\ txi tx) `Set.union` (txo tx)
-
-  
+    True -> return . Just $ txApplyValid utxo tx

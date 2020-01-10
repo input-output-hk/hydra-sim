@@ -41,7 +41,7 @@ ms_avk = AVKey
 ms_sign_delayed :: DiffTime -> SKey -> a -> DelayedComp Sig
 ms_sign_delayed delay (SKey key) _message = delayedComp (Sig key) delay
 
-ms_asig_delayed :: DiffTime -> a -> Set (VKey) -> Set (Sig) -> DelayedComp ASig
+ms_asig_delayed :: DiffTime -> a -> Set VKey -> Set Sig -> DelayedComp ASig
 ms_asig_delayed delay _message _vkeys sigs = delayedComp (ASig sigs) delay
 
 ms_verify_delayed :: DiffTime -> AVKey -> a -> ASig -> DelayedComp Bool

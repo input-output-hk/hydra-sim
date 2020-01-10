@@ -21,6 +21,7 @@ executable hydra-sim
   other-modules:       Channel
                      , DelayedComp
                      , HeadNode
+                     , HeadNode.ProtocolFunctions
                      , HeadNode.Types
                      , Tx.Class
                      , Tx.Mock
