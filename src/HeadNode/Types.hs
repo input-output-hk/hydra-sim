@@ -19,6 +19,22 @@ data Tx tx => TxO tx = TxO
     txoSigma :: Maybe ASig
   } deriving (Eq, Ord, Show)
 
+-- | Snapshot Sequence Number
+newtype SnapN = SnapN Int
+  deriving (Eq, Show)
+
+nextSn :: SnapN -> SnapN
+nextSn (SnapN n) = SnapN (n + 1)
+
+-- | Snapshot objects
+data Tx tx => Snap tx = Snap {
+  snos :: SnapN,
+  snoO :: Set (TxInput tx),
+  snoT :: Set (TxRef tx),
+  snoS :: Set Sig,
+  snoSigma :: Maybe ASig
+  } deriving (Eq, Show)
+
 -- Nodes
 
 -- | Identifiers for nodes in the head protocol.
@@ -67,6 +83,8 @@ data Tx tx => HeadProtocol tx =
 
   -- | Submit a new transaction to the network
     New tx
+  -- | Submit a new snapshot
+  | NewSn
 
   -- inter-node messages
 
@@ -76,6 +94,13 @@ data Tx tx => HeadProtocol tx =
   | SigAckTx (TxRef tx) Sig
   -- | Show a Tx with a multi-sig of every participant.
   | SigConfTx (TxRef tx) ASig
+
+  -- | Request signature for a snapshot.
+  | SigReqSn SnapN (Set (TxRef tx))
+  -- | Provide signature for a snapshot.
+  | SigAckSn SnapN Sig
+  -- | Provide an aggregate signature for a confirmed snapshot.
+  | SigConfSn SnapN ASig
   deriving (Show, Eq)
 
 -- | Decision of the node what to do in response to a message
