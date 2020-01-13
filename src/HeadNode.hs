@@ -259,6 +259,21 @@ handleMessage conf _peer s (SigConfTx txref asig)
     validComp = (ms_verify_tx . hcMSig $ conf) avk (txoTx txob) asig
     isValid = unComp validComp
 
+handleMessage conf _peer s NewSn
+  | (hcLeaderFun conf) snapN /= (hcNodeId conf) = Decision
+    (pure s)
+    (TPNoOp $ (show (hcNodeId conf)) ++ " Cannot create snaphot " ++ show snapN)
+    (pure SendNothing)
+  | otherwise = Decision
+    (pure s)
+    (TPSnNew snapN (hcNodeId conf))
+    (pure $ Multicast (SigReqSn snapN txSet))
+  where
+    snapN = nextSn (hsSnapNConf s)
+    txSet = Map.keysSet $ maxTxos (hsTxsConf s)
+
+
+
 decisionTxNotFound :: Tx tx => HState m tx -> TxRef tx -> Decision m tx
 decisionTxNotFound s txref =
   Decision

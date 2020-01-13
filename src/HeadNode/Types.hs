@@ -35,6 +35,15 @@ data Tx tx => Snap tx = Snap {
   snoSigma :: Maybe ASig
   } deriving (Eq, Show)
 
+emptySnap :: Tx tx => Snap tx
+emptySnap = Snap {
+  snos = SnapN (-1),
+  snoO = Set.empty,
+  snoT = Set.empty,
+  snoS = Set.empty,
+  snoSigma = Nothing
+  }
+
 -- Nodes
 
 -- | Identifiers for nodes in the head protocol.
@@ -48,10 +57,18 @@ data Tx tx => HState m tx = HState {
   hsVKs :: Set VKey,
   -- | Channels for communication with peers.
   hsChannels :: (Map NodeId (Channel m (HeadProtocol tx))),
+  -- | Latest signed snapshot number
+  hsSnapNSig :: SnapN,
+  -- | Latest confirmed snapshot number
+  hsSnapNConf :: SnapN,
   -- | UTxO set signed by this node
   hsUTxOSig :: Set (TxInput tx),
   -- | Confirmed UTxO set
   hsUTxOConf :: Set (TxInput tx),
+  -- | Latest signed snapshot
+  hsSnapSig :: Snap tx,
+  -- | Latest confirmed snapshot
+  hsSnapConf :: Snap tx,
   -- | Set of txs signed by this node
   hsTxsSig :: Map (TxRef tx) (TxO tx),
   -- | Set of confirmed txs
@@ -64,8 +81,12 @@ hnStateEmpty (NodeId i)= HState {
   hsSK = SKey i,
   hsVKs = Set.singleton $ VKey i,
   hsChannels = Map.empty,
+  hsSnapNSig = SnapN (-1),
+  hsSnapNConf = SnapN (-1),
   hsUTxOSig = Set.empty,
   hsUTxOConf = Set.empty,
+  hsSnapSig = emptySnap,
+  hsSnapConf = emptySnap,
   hsTxsSig = Map.empty,
   hsTxsConf = Map.empty
   }
@@ -154,6 +175,10 @@ data Tx tx => TraceProtocolEvent tx =
   | TPTxAck (TxRef tx) NodeId
   -- | A transaction has become confirmed (i.e., acknowledged by all the nodes).
   | TPTxConf (TxRef tx)
+
+  -- | A new snapshot has been submitted by a node.
+  | TPSnNew SnapN NodeId
+
   -- | We tried a transition that failed to alter the state.
   | TPInvalidTransition String
   -- | Transition was valid, but had no effect
