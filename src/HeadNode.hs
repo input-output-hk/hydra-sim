@@ -126,9 +126,8 @@ listener tracer hn = forever $ do
     applyMessage :: NodeId -> HeadProtocol tx -> m ()
     applyMessage peer ms = do
       state <- atomically $ takeTMVar (hnState hn)
-      runComp (canApply state ms) >>= \case
-        True -> do
-          let Decision stateUpdate trace ms' = handleMessage (hnConf hn) peer state ms
+      case handleMessage (hnConf hn) peer state ms of
+        DecApply stateUpdate trace ms' -> do
           -- 'runComp' advances the time by the amount the handler takes,
           -- and unwraps the result
           state' <- runComp stateUpdate
@@ -139,13 +138,15 @@ listener tracer hn = forever $ do
           -- that there is only one event being processed at any time, but since
           -- the state is locked in a 'TMVar', that should be fine.
           runComp ms' >>= sendMessage
-        False -> do
-          -- the event cannot be applied yet, so we put it at the back of the
-          -- queue, and leave the state unchanged
+        DecWait comp -> do
+          runComp comp
           atomically $ do
             writeTBQueue (hnInbox hn) (peer, ms)
             putTMVar (hnState hn) state
           traceWith messageTracer (TraceMessageRequeued ms)
+        DecInvalid comp errmsg -> do
+          runComp comp
+          traceWith protocolTracer (TPInvalidTransition errmsg)
     sendMessage :: SendMessage tx -> m ()
     sendMessage SendNothing = return ()
     sendMessage (SendTo peer ms)
@@ -173,15 +174,6 @@ listener tracer hn = forever $ do
       -- received by another node:
       applyMessage thisId ms
 
--- | This function checks whether an event can be applied, given the current
--- local state of a node.
-canApply
-  :: (Tx tx)
-  => HState m tx -> HeadProtocol tx -> DelayedComp Bool
-
-canApply s (SigReqTx tx) = txValidate (hsUTxOConf s) tx
-canApply _ _ = promptComp True
-
 -- | This is the actual logic of the protocol
 handleMessage
   :: (MonadTimer m, Tx tx)
@@ -189,39 +181,43 @@ handleMessage
   -> NodeId
   -> HStateTransformer m tx
 
-handleMessage conf _peer s (New tx) = Decision
-  (validComp >> pure s)
-  (if isValid
-   then TPTxNew (txRef tx) (hcNodeId conf)
-   else TPInvalidTransition $ "Transaction " ++ show (txRef tx) ++ " is not valid in the confirmed UTxO")
-  (if isValid
-   then return (Multicast (SigReqTx tx))
-   else return SendNothing)
+handleMessage conf _peer s (New tx)
+  | isValid = DecApply
+    (validComp >> pure s)
+    (TPTxNew (txRef tx) (hcNodeId conf))
+    (return (Multicast (SigReqTx tx)))
+  | otherwise =
+    DecInvalid
+    (void validComp)
+    ("Transaction " ++ show (txRef tx) ++ " is not valid in the confirmed UTxO")
   where
     validComp = txValidate (hsUTxOConf s) tx
     isValid = unComp validComp
 
-handleMessage conf peer s (SigReqTx tx) = Decision
-  (pure $ s {
-      hsTxsSig = Map.insert (txRef tx) (txObj (hsTxsConf s) peer tx) (hsTxsSig s),
-      hsUTxOSig = hsUTxOSig s `txApplyValid` tx
-      })
-  (TPTxSig (txRef tx) (hcNodeId conf))
-  (do sigma <- (ms_sig_tx . hcMSig $ conf) (hsSK s) tx
-      return $ SendTo peer (SigAckTx (txRef tx) sigma))
+handleMessage conf peer s (SigReqTx tx)
+  | isValid = DecApply
+    (do void validComp
+        pure $ s {
+          hsTxsSig = Map.insert (txRef tx) (txObj (hsTxsConf s) peer tx) (hsTxsSig s),
+          hsUTxOSig = hsUTxOSig s `txApplyValid` tx
+          })
+    (TPTxSig (txRef tx) (hcNodeId conf))
+    (do sigma <- (ms_sig_tx . hcMSig $ conf) (hsSK s) tx
+        return $ SendTo peer (SigAckTx (txRef tx) sigma))
+  | otherwise = DecWait (void validComp)
+  where
+    validComp = txValidate (hsUTxOConf s) tx
+    isValid = unComp validComp
 
 handleMessage conf peer s (SigAckTx txref sig)
   -- assert that all the requirements are fulfilled
-  | Map.notMember txref (hsTxsSig s) = decisionTxNotFound s txref
-  | txoIssuer txob /= (hcNodeId conf) = Decision
-    (pure s)
-    (TPInvalidTransition $ "Transaction " ++ show txref ++ " not issued by " ++ show (hcNodeId conf))
-    (pure SendNothing)
-  | sig `Set.member` txoS txob = Decision
-    (pure s)
-    (TPNoOp $ "Transition " ++ show txref ++ " already signed with " ++ show sig)
-    (pure SendNothing)
-  | otherwise = Decision
+  | Map.notMember txref (hsTxsSig s) =
+    DecInvalid (return ()) $ "Transaction " ++ show txref ++ " not found."
+  | txoIssuer txob /= (hcNodeId conf) =
+    DecInvalid (return ()) $ "Transaction " ++ show txref ++ " not issued by " ++ show (hcNodeId conf)
+  | sig `Set.member` txoS txob =
+    DecInvalid (return ()) $ "Transition " ++ show txref ++ " already signed with " ++ show sig
+  | otherwise = DecApply
     (pure $ s { hsTxsSig = Map.insert txref txob' (hsTxsSig s) })
     (TPTxAck txref peer)
     (if Set.size (txoS txob') < Set.size (hsVKs s)
@@ -235,12 +231,11 @@ handleMessage conf peer s (SigAckTx txref sig)
     txob' = txob { txoS = sig `Set.insert` txoS txob}
 
 handleMessage conf _peer s (SigConfTx txref asig)
-  | Map.notMember txref (hsTxsSig s) = decisionTxNotFound s txref
-  | not isValid = Decision
-    (pure s)
-    (TPInvalidTransition $ "Invalid aggregate signature " ++ show asig ++ ", " ++ show avk)
-    (pure SendNothing)
-  | otherwise = Decision
+  | Map.notMember txref (hsTxsSig s) =
+    DecInvalid (return ()) $ "Transaction " ++ show txref ++ " not found."
+  | not isValid = DecInvalid (return ())
+    ("Invalid aggregate signature " ++ show asig ++ ", " ++ show avk)
+  | otherwise = DecApply
     (do
         _ <- validComp -- this is only to wait, we already guarded against the
                        -- signature being invalid
@@ -249,7 +244,7 @@ handleMessage conf _peer s (SigConfTx txref asig)
           hsUTxOConf = hsUTxOConf s `txApplyValid` txoTx txob,
           hsTxsSig = txsSig,
           hsTxsConf = txsSig
-                 })
+          })
     (TPTxConf txref)
     (pure SendNothing)
   where
@@ -260,11 +255,9 @@ handleMessage conf _peer s (SigConfTx txref asig)
     isValid = unComp validComp
 
 handleMessage conf _peer s NewSn
-  | (hcLeaderFun conf) snapN /= (hcNodeId conf) = Decision
-    (pure s)
-    (TPNoOp $ (show (hcNodeId conf)) ++ " Cannot create snaphot " ++ show snapN)
-    (pure SendNothing)
-  | otherwise = Decision
+  | (hcLeaderFun conf) snapN /= (hcNodeId conf) =
+    DecInvalid (return ()) $ (show (hcNodeId conf)) ++ " Cannot create snaphot " ++ show snapN
+  | otherwise = DecApply
     (pure s)
     (TPSnNew snapN (hcNodeId conf))
     (pure $ Multicast (SigReqSn snapN txSet))
@@ -273,13 +266,6 @@ handleMessage conf _peer s NewSn
     txSet = Map.keysSet $ maxTxos (hsTxsConf s)
 
 
-
-decisionTxNotFound :: Tx tx => HState m tx -> TxRef tx -> Decision m tx
-decisionTxNotFound s txref =
-  Decision
-    (pure s)
-    (TPInvalidTransition $ "Transaction " ++ show txref ++ " not found.")
-    (pure SendNothing)
 
 
 txSender :: (MonadAsync m, Tx tx) =>

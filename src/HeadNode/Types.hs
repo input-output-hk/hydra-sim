@@ -124,18 +124,31 @@ data Tx tx => HeadProtocol tx =
   | SigConfSn SnapN ASig
   deriving (Show, Eq)
 
--- | Decision of the node what to do in response to a message
-data Decision m tx = Decision {
-  -- | Updated state of the node, to be applied immediately
-  decisionState :: DelayedComp (HState m tx),
-  -- | Trace of the decision
-  decisionTrace :: TraceProtocolEvent tx,
-  -- | I addition to updating the local state, some events also trigger sending
-  -- further messages to one or all nodes.
-  --
-  -- This is a 'DelayedComp', since preparing the message might require time.
-  decisionMessage :: DelayedComp (SendMessage tx)
-  }
+-- | Decision of the node what to do in response to an event.
+data Decision m tx =
+  -- | The event is invalid. Since the check might take some time, this involves
+  -- a 'DelayedComp'.
+    DecInvalid (DelayedComp ()) String
+  -- | The event cannot be applied yet, but we should put it back in the queue.
+  -- Again, this decision might have required some time, which we can encode via
+  -- a 'DelayedComp'.
+  | DecWait (DelayedComp ())
+  -- | The event can be applied, yielding a new state. Optionally, this might
+  -- cause messages to be sent to one or all nodes.
+  | DecApply {
+      -- | Updated state of the node.
+      --
+      -- The 'DelayedComp' should include both the time taken to compute the new
+      -- state, and also any time used for validation checks.
+      decisionState :: DelayedComp (HState m tx),
+      -- | Trace of the decision
+      decisionTrace :: TraceProtocolEvent tx,
+      -- | I addition to updating the local state, some events also trigger
+      -- sending further messages to one or all nodes.
+      --
+      -- This is a 'DelayedComp', since preparing the message might require time.
+      decisionMessage :: DelayedComp (SendMessage tx)
+      }
 
 -- | Events may trigger sending or broadcasting additional messages.
 data SendMessage tx =
