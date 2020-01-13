@@ -50,21 +50,20 @@ twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsyn
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 twoNodesExample tracer = do
-  node0 <- newNode (NodeId 0) (SendSingleTx (MockTx (TxId 0) (millisecondsToDiffTime 1))) simpleMsig
-  node1 <- newNode (NodeId 1) (SendSingleTx (MockTx (TxId 1) (millisecondsToDiffTime 1))) simpleMsig
+  node0 <- newNode $ simpleNodeConf 2 0
+  node1 <- newNode $ simpleNodeConf 2 1
   (cha, chb) <- createConnectedBoundedChannels 100
   addPeer node0 (NodeId 1) cha
   addPeer node1 (NodeId 0) chb
   void $ concurrently (startNode tracer node0) (startNode tracer node1)
 
-
 threeNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 threeNodesExample tracer = do
-  node0 <- newNode (NodeId 0) (SendSingleTx (MockTx (TxId 0) (millisecondsToDiffTime 1))) simpleMsig
-  node1 <- newNode (NodeId 1) (SendSingleTx (MockTx (TxId 1) (millisecondsToDiffTime 1))) simpleMsig
-  node2 <- newNode (NodeId 2) (SendSingleTx (MockTx (TxId 2) (millisecondsToDiffTime 1))) simpleMsig
+  node0 <- newNode $ simpleNodeConf 3 0
+  node1 <- newNode $ simpleNodeConf 3 1
+  node2 <- newNode $ simpleNodeConf 3 2
   (ch01, ch10) <- createConnectedBoundedChannels 100
   (ch02, ch20) <- createConnectedBoundedChannels 100
   (ch12, ch21) <- createConnectedBoundedChannels 100
@@ -83,6 +82,20 @@ simpleMsig = MS {
   ms_asig_tx = ms_asig_delayed (millisecondsToDiffTime 5),
   ms_verify_tx = ms_verify_delayed (millisecondsToDiffTime 7)
   }
+
+-- | Node that sends just one transaction. Snapshots are created round-robin.
+simpleNodeConf
+  :: Int -- ^ Total number of nodes
+  -> Int -- ^ This node number
+  -> NodeConf MockTx
+simpleNodeConf n i
+  | n <= i = error "simpleNodeConf: Node index must be smaller than total number of nodes."
+  | otherwise = NodeConf {
+      hcNodeId = NodeId i,
+      hcTxSendStrategy = SendSingleTx (MockTx (TxId i) (millisecondsToDiffTime 1)),
+      hcMSig = simpleMsig,
+      hcLeaderFun = \(SnapN s) -> NodeId (s `mod` n)
+      }
 
 millisecondsToDiffTime :: Integer -> DiffTime
 millisecondsToDiffTime = picosecondsToDiffTime . (* 1000000000)

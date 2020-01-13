@@ -34,28 +34,32 @@ data Tx tx => MS tx = MS {
   ms_verify_tx :: AVKey -> tx -> ASig -> DelayedComp Bool
   }
 
+data Tx tx => NodeConf tx = NodeConf {
+  hcNodeId :: NodeId,
+  hcTxSendStrategy :: TxSendStrategy tx,
+  hcMSig :: MS tx,
+  -- | Determine who is responsible to create which snapshot.
+  hcLeaderFun :: SnapN -> NodeId
+  }
+
 data Tx tx => HeadNode m tx = HeadNode {
-  hnId :: NodeId,
+  hnConf :: NodeConf tx,
   hnState :: TMVar m (HState m tx),
   hnInbox :: TBQueue m (NodeId, HeadProtocol tx),
-  hnPeerHandlers :: TVar m (Map NodeId (Async m ())),
-  hnTxSendStrategy :: TxSendStrategy tx,
-  hnMSig :: MS tx
+  hnPeerHandlers :: TVar m (Map NodeId (Async m ()))
   }
 
 newNode :: (MonadSTM m, Tx tx) =>
-  NodeId -> TxSendStrategy tx -> MS tx -> m (HeadNode m tx)
-newNode nodeId txSendStrategy msig = do
-  state <- newTMVarM $ hnStateEmpty nodeId
+  NodeConf tx -> m (HeadNode m tx)
+newNode conf = do
+  state <- newTMVarM $ hnStateEmpty (hcNodeId conf)
   inbox <- atomically $ newTBQueue 100 -- TODO: make this configurable
   handlers <- newTVarM Map.empty
   return $ HeadNode {
-    hnId = nodeId,
+    hnConf = conf,
     hnState = state,
     hnInbox = inbox,
-    hnPeerHandlers = handlers,
-    hnTxSendStrategy = txSendStrategy,
-    hnMSig = msig
+    hnPeerHandlers = handlers
     }
 
 startNode
@@ -99,7 +103,7 @@ clientMessage
   -> m ()
 clientMessage tracer hn message = do
   traceWith messageTracer $ TraceMessageClient message
-  atomically $ writeTBQueue (hnInbox hn) (hnId hn, message)
+  atomically $ writeTBQueue (hnInbox hn) (hcNodeId (hnConf hn), message)
   where
     messageTracer = contramap HydraMessage tracer
 
@@ -118,12 +122,13 @@ listener tracer hn = forever $ do
   where
     messageTracer = contramap HydraMessage tracer
     protocolTracer = contramap HydraProtocol tracer
+    thisId = hcNodeId (hnConf hn)
     applyMessage :: NodeId -> HeadProtocol tx -> m ()
     applyMessage peer ms = do
       state <- atomically $ takeTMVar (hnState hn)
       runComp (canApply state ms) >>= \case
         True -> do
-          let Decision stateUpdate trace ms' = handleMessage (hnMSig hn) (hnId hn) peer state ms
+          let Decision stateUpdate trace ms' = handleMessage (hnConf hn) peer state ms
           -- 'runComp' advances the time by the amount the handler takes,
           -- and unwraps the result
           state' <- runComp stateUpdate
@@ -145,7 +150,7 @@ listener tracer hn = forever $ do
     sendMessage SendNothing = return ()
     sendMessage (SendTo peer ms)
       -- messges to the same node are just added to the inbox directly
-      | peer == (hnId hn) = do
+      | peer == thisId = do
           traceWith messageTracer (TraceMessageSent peer ms)
           atomically $ writeTBQueue (hnInbox hn) (peer, ms)
       | otherwise = do
@@ -155,7 +160,7 @@ listener tracer hn = forever $ do
               traceWith messageTracer (TraceMessageSent peer ms)
               send ch ms
             Nothing ->
-              error $ concat ["Error in ", show (hnId hn)
+              error $ concat ["Error in ", show thisId
                              , ": Did not find peer ", show peer
                              , " in ", show . Map.keys . hsChannels $ s]
     sendMessage (Multicast ms) = do
@@ -166,7 +171,7 @@ listener tracer hn = forever $ do
       -- as described in the paper, multicasting a message always is followed by
       -- the sending node itself acting on the message, as if it had been
       -- received by another node:
-      applyMessage (hnId hn) ms
+      applyMessage thisId ms
 
 -- | This function checks whether an event can be applied, given the current
 -- local state of a node.
@@ -180,15 +185,14 @@ canApply _ _ = promptComp True
 -- | This is the actual logic of the protocol
 handleMessage
   :: (MonadTimer m, Tx tx)
-  => MS tx
-  -> NodeId
+  => NodeConf tx
   -> NodeId
   -> HStateTransformer m tx
 
-handleMessage _msig i _peer s (New tx) = Decision
+handleMessage conf _peer s (New tx) = Decision
   (validComp >> pure s)
   (if isValid
-   then TPTxNew (txRef tx) i
+   then TPTxNew (txRef tx) (hcNodeId conf)
    else TPInvalidTransition $ "Transaction " ++ show (txRef tx) ++ " is not valid in the confirmed UTxO")
   (if isValid
    then return (Multicast (SigReqTx tx))
@@ -197,21 +201,21 @@ handleMessage _msig i _peer s (New tx) = Decision
     validComp = txValidate (hsUTxOConf s) tx
     isValid = unComp validComp
 
-handleMessage msig i peer s (SigReqTx tx) = Decision
+handleMessage conf peer s (SigReqTx tx) = Decision
   (pure $ s {
       hsTxsSig = Map.insert (txRef tx) (txObj (hsTxsConf s) peer tx) (hsTxsSig s),
       hsUTxOSig = hsUTxOSig s `txApplyValid` tx
       })
-  (TPTxSig (txRef tx) i)
-  (do sigma <- (ms_sig_tx msig) (hsSK s) tx
+  (TPTxSig (txRef tx) (hcNodeId conf))
+  (do sigma <- (ms_sig_tx . hcMSig $ conf) (hsSK s) tx
       return $ SendTo peer (SigAckTx (txRef tx) sigma))
 
-handleMessage msig i peer s (SigAckTx txref sig)
+handleMessage conf peer s (SigAckTx txref sig)
   -- assert that all the requirements are fulfilled
   | Map.notMember txref (hsTxsSig s) = decisionTxNotFound s txref
-  | txoIssuer txob /= i = Decision
+  | txoIssuer txob /= (hcNodeId conf) = Decision
     (pure s)
-    (TPInvalidTransition $ "Transaction " ++ show txref ++ " not issued by " ++ show i)
+    (TPInvalidTransition $ "Transaction " ++ show txref ++ " not issued by " ++ show (hcNodeId conf))
     (pure SendNothing)
   | sig `Set.member` txoS txob = Decision
     (pure s)
@@ -223,14 +227,14 @@ handleMessage msig i peer s (SigAckTx txref sig)
     (if Set.size (txoS txob') < Set.size (hsVKs s)
      then pure SendNothing
      else do
-        asig <- (ms_asig_tx msig) (txoTx txob') (hsVKs s) (txoS txob')
+        asig <- (ms_asig_tx . hcMSig $ conf) (txoTx txob') (hsVKs s) (txoS txob')
         return $ Multicast (SigConfTx txref asig)
         )
   where
     txob = (hsTxsSig s) Map.! txref
     txob' = txob { txoS = sig `Set.insert` txoS txob}
 
-handleMessage msig _i _peer s (SigConfTx txref asig)
+handleMessage conf _peer s (SigConfTx txref asig)
   | Map.notMember txref (hsTxsSig s) = decisionTxNotFound s txref
   | not isValid = Decision
     (pure s)
@@ -252,7 +256,7 @@ handleMessage msig _i _peer s (SigConfTx txref asig)
     avk = ms_avk $ hsVKs s
     txob = (hsTxsSig s) Map.! txref
     txob' = txob { txoSigma = Just asig }
-    validComp = (ms_verify_tx msig) avk (txoTx txob) asig
+    validComp = (ms_verify_tx . hcMSig $ conf) avk (txoTx txob) asig
     isValid = unComp validComp
 
 decisionTxNotFound :: Tx tx => HState m tx -> TxRef tx -> Decision m tx
@@ -266,6 +270,6 @@ decisionTxNotFound s txref =
 txSender :: (MonadAsync m, Tx tx) =>
   Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
-txSender tracer hn = case (hnTxSendStrategy hn) of
+txSender tracer hn = case (hcTxSendStrategy (hnConf hn)) of
   SendSingleTx tx -> clientMessage tracer hn (New tx)
   SendNoTx -> return ()
