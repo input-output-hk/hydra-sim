@@ -287,6 +287,28 @@ handleMessage conf peer s (SigReqSn snapN txRefs)
              hsSnapSig = snObj snapN (snoO $ hsSnapConf s) txRefs
            }
 
+handleMessage conf peer s (SigAckSn snapN sig)
+  | snapN /= (hsSnapNSig s) = DecInvalid (return ())
+    ("Got signature for snapshot " ++ show snapN
+     ++ " when signed snapshot was " ++ show (hsSnapNSig s))
+  | (hcLeaderFun conf) snapN /= hcNodeId conf = DecInvalid (return ())
+    ("Received signature for snapshot " ++ show snapN
+     ++ " which was not ours to create")
+  | (sig `Set.member` snoS snob) = DecInvalid (return ())
+    ("Received signature " ++ show sig ++ " for snapshot "
+     ++ show snapN ++ ", which we already had.")
+  | otherwise = DecApply
+    (return $ s { hsSnapSig = snob' })
+    (TPSnAck snapN peer)
+    (if Set.size (snoS snob') < Set.size (hsVKs s)
+     then pure SendNothing
+     else do
+        asig <- (ms_asig_sn . hcMSig $ conf) (snapN, snoO snob') (hsVKs s) (snoS snob')
+        return $ Multicast (SigConfSn snapN asig))
+  where
+    snob = hsSnapSig s
+    snob' = snob {snoS = sig `Set.insert` snoS snob}
+
 
 
 txSender :: (MonadAsync m, Tx tx) =>
