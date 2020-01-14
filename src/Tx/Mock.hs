@@ -24,3 +24,5 @@ instance Tx MockTx where
   txo _ = Set.empty
 
   txValidate _ tx = delayedComp True (mtxValidationDelay tx)
+
+  txSort = id -- We do not have inputs/outputs, so any order is fine.

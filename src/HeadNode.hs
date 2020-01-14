@@ -284,7 +284,7 @@ handleMessage conf peer s (SigReqSn snapN txRefs)
   where
     lastSn = hsSnapNSig s
     s' = s { hsSnapNSig = snapN,
-             hsSnapSig = snObj snapN (snoO $ hsSnapConf s) txRefs
+             hsSnapSig = snObj s snapN (snoO $ hsSnapConf s) txRefs
            }
 
 handleMessage conf peer s (SigAckSn snapN sig)
