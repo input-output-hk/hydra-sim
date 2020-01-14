@@ -80,8 +80,12 @@ simpleMsig :: MS MockTx
 simpleMsig = MS {
   ms_sig_tx = ms_sign_delayed (millisecondsToDiffTime 2),
   ms_asig_tx = ms_asig_delayed (millisecondsToDiffTime 5),
-  ms_verify_tx = ms_verify_delayed (millisecondsToDiffTime 7)
-  }
+  ms_verify_tx = ms_verify_delayed (millisecondsToDiffTime 7),
+
+  ms_sig_sn = ms_sign_delayed (millisecondsToDiffTime 2),
+  ms_asig_sn = ms_asig_delayed (millisecondsToDiffTime 5),
+  ms_verify_sn = ms_verify_delayed (millisecondsToDiffTime 7)
+}
 
 -- | Node that sends just one transaction. Snapshots are created round-robin.
 simpleNodeConf

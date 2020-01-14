@@ -31,7 +31,11 @@ data TxSendStrategy tx =
 data Tx tx => MS tx = MS {
   ms_sig_tx :: SKey -> tx -> DelayedComp Sig,
   ms_asig_tx :: tx -> Set VKey -> Set Sig -> DelayedComp ASig,
-  ms_verify_tx :: AVKey -> tx -> ASig -> DelayedComp Bool
+  ms_verify_tx :: AVKey -> tx -> ASig -> DelayedComp Bool,
+
+  ms_sig_sn :: SKey -> (SnapN, Set (TxInput tx)) -> DelayedComp Sig,
+  ms_asig_sn :: (SnapN, Set (TxInput tx)) -> Set VKey -> Set Sig -> DelayedComp ASig,
+  ms_verify_sn :: AVKey -> (SnapN, Set (TxInput tx)) -> ASig -> DelayedComp Bool
   }
 
 data Tx tx => NodeConf tx = NodeConf {
@@ -265,6 +269,23 @@ handleMessage conf _peer s NewSn
     snapN = nextSn (hsSnapNConf s)
     txSet = Map.keysSet $ maxTxos (hsTxsConf s)
 
+handleMessage conf peer s (SigReqSn snapN txRefs)
+  | snapN /= nextSn lastSn =
+    DecInvalid (return ()) $ ("Did not expec snapshot " ++ show snapN ++ ", last was " ++ show lastSn)
+  | (hcLeaderFun conf) snapN /= peer =
+    DecInvalid (return ()) $ (show peer ++ " should not create snapshot " ++ show snapN)
+  | hsSnapNConf s /= hsSnapNSig s = DecWait (return ())
+  | not (txRefs `Set.isSubsetOf` Map.keysSet (hsTxsConf s)) = DecWait (return ())
+  | otherwise = DecApply
+    (return s')
+    (TPSnSig snapN (hcNodeId conf))
+    (do sig <- (ms_sig_sn . hcMSig $ conf) (hsSK s) (snapN, snoO (hsSnapSig s'))
+        return $ SendTo peer (SigAckSn snapN sig))
+  where
+    lastSn = hsSnapNSig s
+    s' = s { hsSnapNSig = snapN,
+             hsSnapSig = snObj snapN (snoO $ hsSnapConf s) txRefs
+           }
 
 
 
