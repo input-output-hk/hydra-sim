@@ -195,6 +195,8 @@ data Tx tx => TraceProtocolEvent tx =
   | TPSnSig SnapN NodeId
   -- | Snapshot signature has been received from a node.
   | TPSnAck SnapN NodeId
+  -- | Snapshot is confirmed.
+  | TPSnConf SnapN
 
   -- | We tried a transition that failed to alter the state.
   | TPInvalidTransition String

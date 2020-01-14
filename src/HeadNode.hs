@@ -237,8 +237,8 @@ handleMessage conf peer s (SigAckTx txref sig)
 handleMessage conf _peer s (SigConfTx txref asig)
   | Map.notMember txref (hsTxsSig s) =
     DecInvalid (return ()) $ "Transaction " ++ show txref ++ " not found."
-  | not isValid = DecInvalid (return ())
-    ("Invalid aggregate signature " ++ show asig ++ ", " ++ show avk)
+  | not isValid = DecInvalid (void validComp)
+    ("Invalid aggregate signature " ++ show asig ++ ", " ++ show avk ++ " in SigConfTx")
   | otherwise = DecApply
     (do
         _ <- validComp -- this is only to wait, we already guarded against the
@@ -309,6 +309,32 @@ handleMessage conf peer s (SigAckSn snapN sig)
     snob = hsSnapSig s
     snob' = snob {snoS = sig `Set.insert` snoS snob}
 
+handleMessage conf _peer s (SigConfSn snapN asig)
+  | snapN /= (hsSnapNSig s) = DecInvalid (return ())
+    ("Can't confirm snapshot " ++ show snapN
+      ++ " when last signed snapshot is " ++ show (hsSnapNSig s))
+  | (hsSnapNSig s) == (hsSnapNConf s) = DecInvalid (return ())
+    ("Trying to confirm " ++ show snapN ++ " but it is leady confirmed.")
+  | not isValid = DecInvalid (void validComp)
+    ("Invalid aggregate signature " ++ show asig ++ ", " ++ show avk ++ " in SigConfSn")
+  | otherwise = DecApply
+    (do void validComp
+        return s')
+    (TPSnConf snapN)
+    (pure SendNothing)
+  where
+    avk = ms_avk $ hsVKs s
+    snob = hsSnapSig s
+    snob' = snob { snoSigma = Just asig }
+    validComp = (ms_verify_sn . hcMSig $ conf) avk (snapN, snoO snob) asig
+    isValid = unComp validComp
+    s' = s {
+      hsSnapNConf = snapN,
+      hsSnapSig = snob',
+      hsSnapConf = snob,
+      hsTxsConf = (hsTxsConf s) Map.\\ reach (hsTxsConf s) (snoT snob'),
+      hsTxsSig = (hsTxsSig s) Map.\\ reach (hsTxsSig s) (snoT snob')
+      }
 
 
 txSender :: (MonadAsync m, Tx tx) =>

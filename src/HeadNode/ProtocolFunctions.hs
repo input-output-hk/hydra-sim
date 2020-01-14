@@ -1,7 +1,8 @@
 module HeadNode.ProtocolFunctions
   ( maxTxos,
     txObj,
-    snObj
+    snObj,
+    reach
   ) where
 
 import Data.Set (Set)
@@ -36,3 +37,10 @@ txObj txsConf k tx = TxO {
 
 snObj :: Tx tx => SnapN -> Set (TxInput tx) -> Set (TxRef tx) -> Snap tx
 snObj = undefined
+
+reach
+  :: Tx tx
+  => Map (TxRef tx) (TxO tx)
+  -> Set (TxRef tx)
+  -> Map (TxRef tx) (TxO tx)
+reach = undefined
