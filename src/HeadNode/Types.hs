@@ -19,6 +19,31 @@ data Tx tx => TxO tx = TxO
     txoSigma :: Maybe ASig
   } deriving (Eq, Ord, Show)
 
+-- | Snapshot Sequence Number
+newtype SnapN = SnapN Int
+  deriving (Eq, Show)
+
+nextSn :: SnapN -> SnapN
+nextSn (SnapN n) = SnapN (n + 1)
+
+-- | Snapshot objects
+data Tx tx => Snap tx = Snap {
+  snos :: SnapN,
+  snoO :: Set (TxInput tx),
+  snoT :: Set (TxRef tx),
+  snoS :: Set Sig,
+  snoSigma :: Maybe ASig
+  } deriving (Eq, Show)
+
+emptySnap :: Tx tx => Snap tx
+emptySnap = Snap {
+  snos = SnapN (-1),
+  snoO = Set.empty,
+  snoT = Set.empty,
+  snoS = Set.empty,
+  snoSigma = Nothing
+  }
+
 -- Nodes
 
 -- | Identifiers for nodes in the head protocol.
@@ -32,10 +57,18 @@ data Tx tx => HState m tx = HState {
   hsVKs :: Set VKey,
   -- | Channels for communication with peers.
   hsChannels :: (Map NodeId (Channel m (HeadProtocol tx))),
+  -- | Latest signed snapshot number
+  hsSnapNSig :: SnapN,
+  -- | Latest confirmed snapshot number
+  hsSnapNConf :: SnapN,
   -- | UTxO set signed by this node
   hsUTxOSig :: Set (TxInput tx),
   -- | Confirmed UTxO set
   hsUTxOConf :: Set (TxInput tx),
+  -- | Latest signed snapshot
+  hsSnapSig :: Snap tx,
+  -- | Latest confirmed snapshot
+  hsSnapConf :: Snap tx,
   -- | Set of txs signed by this node
   hsTxsSig :: Map (TxRef tx) (TxO tx),
   -- | Set of confirmed txs
@@ -48,8 +81,12 @@ hnStateEmpty (NodeId i)= HState {
   hsSK = SKey i,
   hsVKs = Set.singleton $ VKey i,
   hsChannels = Map.empty,
+  hsSnapNSig = SnapN (-1),
+  hsSnapNConf = SnapN (-1),
   hsUTxOSig = Set.empty,
   hsUTxOConf = Set.empty,
+  hsSnapSig = emptySnap,
+  hsSnapConf = emptySnap,
   hsTxsSig = Map.empty,
   hsTxsConf = Map.empty
   }
@@ -67,6 +104,8 @@ data Tx tx => HeadProtocol tx =
 
   -- | Submit a new transaction to the network
     New tx
+  -- | Submit a new snapshot
+  | NewSn
 
   -- inter-node messages
 
@@ -76,20 +115,40 @@ data Tx tx => HeadProtocol tx =
   | SigAckTx (TxRef tx) Sig
   -- | Show a Tx with a multi-sig of every participant.
   | SigConfTx (TxRef tx) ASig
+
+  -- | Request signature for a snapshot.
+  | SigReqSn SnapN (Set (TxRef tx))
+  -- | Provide signature for a snapshot.
+  | SigAckSn SnapN Sig
+  -- | Provide an aggregate signature for a confirmed snapshot.
+  | SigConfSn SnapN ASig
   deriving (Show, Eq)
 
--- | Decision of the node what to do in response to a message
-data Decision m tx = Decision {
-  -- | Updated state of the node, to be applied immediately
-  decisionState :: DelayedComp (HState m tx),
-  -- | Trace of the decision
-  decisionTrace :: TraceProtocolEvent tx,
-  -- | I addition to updating the local state, some events also trigger sending
-  -- further messages to one or all nodes.
-  --
-  -- This is a 'DelayedComp', since preparing the message might require time.
-  decisionMessage :: DelayedComp (SendMessage tx)
-  }
+-- | Decision of the node what to do in response to an event.
+data Decision m tx =
+  -- | The event is invalid. Since the check might take some time, this involves
+  -- a 'DelayedComp'.
+    DecInvalid (DelayedComp ()) String
+  -- | The event cannot be applied yet, but we should put it back in the queue.
+  -- Again, this decision might have required some time, which we can encode via
+  -- a 'DelayedComp'.
+  | DecWait (DelayedComp ())
+  -- | The event can be applied, yielding a new state. Optionally, this might
+  -- cause messages to be sent to one or all nodes.
+  | DecApply {
+      -- | Updated state of the node.
+      --
+      -- The 'DelayedComp' should include both the time taken to compute the new
+      -- state, and also any time used for validation checks.
+      decisionState :: DelayedComp (HState m tx),
+      -- | Trace of the decision
+      decisionTrace :: TraceProtocolEvent tx,
+      -- | I addition to updating the local state, some events also trigger
+      -- sending further messages to one or all nodes.
+      --
+      -- This is a 'DelayedComp', since preparing the message might require time.
+      decisionMessage :: DelayedComp (SendMessage tx)
+      }
 
 -- | Events may trigger sending or broadcasting additional messages.
 data SendMessage tx =
@@ -129,6 +188,16 @@ data Tx tx => TraceProtocolEvent tx =
   | TPTxAck (TxRef tx) NodeId
   -- | A transaction has become confirmed (i.e., acknowledged by all the nodes).
   | TPTxConf (TxRef tx)
+
+  -- | A new snapshot has been submitted by a node.
+  | TPSnNew SnapN NodeId
+  -- | Snapshot is being signed by a node.
+  | TPSnSig SnapN NodeId
+  -- | Snapshot signature has been received from a node.
+  | TPSnAck SnapN NodeId
+  -- | Snapshot is confirmed.
+  | TPSnConf SnapN
+
   -- | We tried a transition that failed to alter the state.
   | TPInvalidTransition String
   -- | Transition was valid, but had no effect

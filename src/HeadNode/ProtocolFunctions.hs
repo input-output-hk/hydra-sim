@@ -1,8 +1,11 @@
 module HeadNode.ProtocolFunctions
-  ( maxTxos, txObj
+  ( maxTxos,
+    txObj,
+    snObj,
+    reach
   ) where
 
--- import Data.Set (Set)
+import Data.Set (Set)
 import qualified Data.Set as Set
 import Data.Map (Map)
 import qualified Data.Map as Map
@@ -31,3 +34,43 @@ txObj txsConf k tx = TxO {
             txsConf
       in Map.keysSet $ maxTxos txobs
   }
+
+snObj
+  :: Tx tx
+  => HState m tx
+  -> SnapN
+  -> Set (TxInput tx)
+  -> Set (TxRef tx)
+  -> Snap tx
+snObj hs s o t = Snap {
+  snos = s,
+  snoO = applyValidTxs o (txObMapToTxs $ reach (hsTxsConf hs) t),
+  snoT = t,
+  snoS = Set.empty,
+  snoSigma = Nothing
+  }
+  where
+    txObMapToTxs = Map.elems . fmap txoTx
+
+reachOb
+  :: Tx tx
+  => Map (TxRef tx) (TxO tx)
+  -> Map (TxRef tx) (TxO tx)
+  -> Map (TxRef tx) (TxO tx)
+reachOb tb tobs =
+  let referencedTxRefs = Set.unions (txoT <$> tobs)
+      referencedTxs = Map.filterWithKey
+                      (\txref _ -> txref `Set.member` referencedTxRefs
+                        && not (txref `Set.member` Map.keysSet tobs))
+                      tb
+      r = reachOb tb referencedTxs
+  in (tobs `Map.intersection` tb) `Map.union` r
+
+reach
+  :: Tx tx
+  => Map (TxRef tx) (TxO tx)
+  -> Set (TxRef tx)
+  -> Map (TxRef tx) (TxO tx)
+reach tb trefs = reachOb tb $
+  Map.filterWithKey (\txref _ -> txref `Set.member` trefs) tb
+

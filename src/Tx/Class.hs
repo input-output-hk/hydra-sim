@@ -5,6 +5,7 @@ module Tx.Class where
 
 
 import Data.Kind (Type)
+import Data.List (foldl')
 import Data.Set (Set)
 import qualified Data.Set as Set
 
@@ -12,7 +13,7 @@ import DelayedComp
 
 -- | Abstract transaction.
 class (Eq (TxRef tx), Ord (TxRef tx), Show (TxRef tx),
-       Ord (TxInput tx))
+       Eq (TxInput tx), Ord (TxInput tx), Show (TxInput tx))
   => Tx tx where
 
   -- | Transaction reference (i.e., hash)
@@ -47,3 +48,10 @@ class (Eq (TxRef tx), Ord (TxRef tx), Show (TxRef tx),
   txApply utxo tx = txValidate utxo tx >>= \case
     False -> return Nothing
     True -> return . Just $ txApplyValid utxo tx
+
+  -- | Sort transactions respecting partial order of inputs/outputs
+  txSort :: [tx] -> [tx]
+
+applyValidTxs :: Tx tx => Set (TxInput tx) -> [tx] -> Set (TxInput tx)
+applyValidTxs initialUtxo txSet =
+  foldl' txApplyValid initialUtxo (txSort txSet)
