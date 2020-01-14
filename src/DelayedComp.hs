@@ -6,7 +6,6 @@ module DelayedComp
     runComp
   ) where
 
-import Control.Monad (liftM2)
 import Data.Time.Clock (DiffTime)
 
 import Control.Monad.Class.MonadTimer

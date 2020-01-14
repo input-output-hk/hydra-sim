@@ -52,10 +52,10 @@ twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsyn
 twoNodesExample tracer = do
   node0 <- newNode $ simpleNodeConf 2 0
   node1 <- newNode $ simpleNodeConf 2 1
-  (cha, chb) <- createConnectedBoundedChannels 100
-  addPeer node0 (NodeId 1) cha
-  addPeer node1 (NodeId 0) chb
+  connectNodes simpleChannels node0 node1
   void $ concurrently (startNode tracer node0) (startNode tracer node1)
+  where
+    simpleChannels = createConnectedBoundedChannels 100
 
 threeNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
   => Tracer m (TraceHydraEvent MockTx)
@@ -64,17 +64,13 @@ threeNodesExample tracer = do
   node0 <- newNode $ simpleNodeConf 3 0
   node1 <- newNode $ simpleNodeConf 3 1
   node2 <- newNode $ simpleNodeConf 3 2
-  (ch01, ch10) <- createConnectedBoundedChannels 100
-  (ch02, ch20) <- createConnectedBoundedChannels 100
-  (ch12, ch21) <- createConnectedBoundedChannels 100
-  addPeer node0 (NodeId 1) ch01
-  addPeer node0 (NodeId 2) ch02
-  addPeer node1 (NodeId 0) ch10
-  addPeer node1 (NodeId 2) ch12
-  addPeer node2 (NodeId 1) ch21
-  addPeer node2 (NodeId 0) ch20
+  connectNodes simpleChannels node0 node1
+  connectNodes simpleChannels node0 node2
+  connectNodes simpleChannels node1 node2
   void $ concurrently (startNode tracer node0) $
     concurrently (startNode tracer node1) (startNode tracer node2)
+  where
+    simpleChannels = createConnectedBoundedChannels 100
 
 simpleMsig :: MS MockTx
 simpleMsig = MS {
