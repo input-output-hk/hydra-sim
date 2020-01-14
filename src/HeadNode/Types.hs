@@ -5,10 +5,17 @@ import qualified Data.Map as Map
 import Data.Set (Set)
 import qualified Data.Set as Set
 
+import Control.Monad.Class.MonadAsync
+import Control.Monad.Class.MonadSTM
+
 import Channel
 import DelayedComp
 import MSig.Mock
 import Tx.Class
+
+-- | Identifiers for nodes in the head protocol.
+newtype NodeId = NodeId Int
+  deriving (Show, Ord, Eq)
 
 -- | Local transaction objects
 data Tx tx => TxO tx = TxO
@@ -44,11 +51,36 @@ emptySnap = Snap {
   snoSigma = Nothing
   }
 
--- Nodes
+data TxSendStrategy tx =
+    SendNoTx
+  | SendSingleTx tx
+  deriving (Show, Eq)
 
--- | Identifiers for nodes in the head protocol.
-newtype NodeId = NodeId Int
-  deriving (Show, Ord, Eq)
+-- Multi-sig functionality for a given node.
+data Tx tx => MS tx = MS {
+  ms_sig_tx :: SKey -> tx -> DelayedComp Sig,
+  ms_asig_tx :: tx -> Set VKey -> Set Sig -> DelayedComp ASig,
+  ms_verify_tx :: AVKey -> tx -> ASig -> DelayedComp Bool,
+
+  ms_sig_sn :: SKey -> (SnapN, Set (TxInput tx)) -> DelayedComp Sig,
+  ms_asig_sn :: (SnapN, Set (TxInput tx)) -> Set VKey -> Set Sig -> DelayedComp ASig,
+  ms_verify_sn :: AVKey -> (SnapN, Set (TxInput tx)) -> ASig -> DelayedComp Bool
+  }
+
+data Tx tx => NodeConf tx = NodeConf {
+  hcNodeId :: NodeId,
+  hcTxSendStrategy :: TxSendStrategy tx,
+  hcMSig :: MS tx,
+  -- | Determine who is responsible to create which snapshot.
+  hcLeaderFun :: SnapN -> NodeId
+  }
+
+data Tx tx => HeadNode m tx = HeadNode {
+  hnConf :: NodeConf tx,
+  hnState :: TMVar m (HState m tx),
+  hnInbox :: TBQueue m (NodeId, HeadProtocol tx),
+  hnPeerHandlers :: TVar m (Map NodeId (Async m ()))
+  }
 
 data Tx tx => HState m tx = HState {
   hsPartyIndex :: Int,

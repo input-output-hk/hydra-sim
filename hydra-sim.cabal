@@ -23,6 +23,7 @@ executable hydra-sim
                      , HeadNode
                      , HeadNode.ProtocolFunctions
                      , HeadNode.Types
+                     , HeadNode.Handler
                      , Tx.Class
                      , Tx.Mock
                      , MSig.Mock
