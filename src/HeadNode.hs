@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module HeadNode
   ( newNode,
-    addPeer,
+    connectNodes,
     startNode
   ) where
 
@@ -39,6 +39,17 @@ newNode conf = do
     hnInbox = inbox,
     hnPeerHandlers = handlers
     }
+
+connectNodes
+  :: (MonadAsync m, Tx tx)
+  => m (Channel m (HeadProtocol tx), Channel m (HeadProtocol tx))
+  -> HeadNode m tx
+  -> HeadNode m tx
+  -> m ()
+connectNodes createChannels node node' = do
+  (ch, ch') <- createChannels
+  addPeer node (hcNodeId $ hnConf node') ch
+  addPeer node' (hcNodeId $ hnConf node) ch'
 
 startNode
   :: (MonadSTM m, MonadTimer m, MonadAsync m,
