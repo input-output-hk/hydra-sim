@@ -57,14 +57,16 @@ reachOb
   => Map (TxRef tx) (TxO tx)
   -> Map (TxRef tx) (TxO tx)
   -> Map (TxRef tx) (TxO tx)
-reachOb tb tobs =
-  let referencedTxRefs = Set.unions (txoT <$> tobs)
-      referencedTxs = Map.filterWithKey
-                      (\txref _ -> txref `Set.member` referencedTxRefs
-                        && not (txref `Set.member` Map.keysSet tobs))
-                      tb
-      r = reachOb tb referencedTxs
-  in (tobs `Map.intersection` tb) `Map.union` r
+reachOb tb tobs
+  | Map.null tobs = Map.empty
+  | otherwise =
+    let referencedTxRefs = Set.unions (txoT <$> tobs)
+        referencedTxs = Map.filterWithKey
+                        (\txref _ -> txref `Set.member` referencedTxRefs
+                          && not (txref `Set.member` Map.keysSet tobs))
+                        tb
+        r = reachOb tb referencedTxs
+    in (tobs `Map.intersection` tb) `Map.union` r
 
 reach
   :: Tx tx
