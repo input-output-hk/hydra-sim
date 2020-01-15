@@ -1,5 +1,6 @@
 module HeadNode.Types where
 
+import Data.List (intercalate)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
@@ -28,10 +29,13 @@ data Tx tx => TxO tx = TxO
 
 -- | Snapshot Sequence Number
 newtype SnapN = SnapN Int
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 nextSn :: SnapN -> SnapN
 nextSn (SnapN n) = SnapN (n + 1)
+
+noSnapN :: SnapN
+noSnapN = SnapN (-1)
 
 -- | Snapshot objects
 data Tx tx => Snap tx = Snap {
@@ -44,7 +48,7 @@ data Tx tx => Snap tx = Snap {
 
 emptySnap :: Tx tx => Snap tx
 emptySnap = Snap {
-  snos = SnapN (-1),
+  snos = noSnapN,
   snoO = Set.empty,
   snoT = Set.empty,
   snoS = Set.empty,
@@ -54,7 +58,24 @@ emptySnap = Snap {
 data TxSendStrategy tx =
     SendNoTx
   | SendSingleTx tx
+  -- | This will send the whole list of transactions at once.
+  --
+  -- If you want to send many transactions, this is bound to overflow some
+  -- queues; use SendTxs instead.
+  | SendTxsDumb [tx]
+  -- | @SendTxs limit txs@ will only sends the next transaction when there are
+  -- fewer than @limit@ transactions from the original list in flight (i.e., not
+  -- confirmed yet).
+  | SendTxs Int [tx]
   deriving (Show, Eq)
+
+-- | Strategies for nodes to create snapshots
+data SnapStrategy =
+  -- | No snapshots are created.
+    NoSnapshots
+  -- | After a number of transactions have been confirmed, a snapshot is
+  -- created.
+  | SnapAfterNTxs Int
 
 -- Multi-sig functionality for a given node.
 data Tx tx => MS tx = MS {
@@ -72,7 +93,8 @@ data Tx tx => NodeConf tx = NodeConf {
   hcTxSendStrategy :: TxSendStrategy tx,
   hcMSig :: MS tx,
   -- | Determine who is responsible to create which snapshot.
-  hcLeaderFun :: SnapN -> NodeId
+  hcLeaderFun :: SnapN -> NodeId,
+  hcSnapshotStrategy :: SnapStrategy
   }
 
 data Tx tx => HeadNode m tx = HeadNode {
@@ -83,44 +105,67 @@ data Tx tx => HeadNode m tx = HeadNode {
   }
 
 data Tx tx => HState m tx = HState {
-  hsPartyIndex :: Int,
-  hsSK :: SKey,
+  hsSK :: !SKey,
   -- | Verification keys of all nodes (including this one)
-  hsVKs :: Set VKey,
+  hsVKs :: !(Set VKey),
   -- | Channels for communication with peers.
-  hsChannels :: (Map NodeId (Channel m (HeadProtocol tx))),
+  hsChannels :: !(Map NodeId (Channel m (HeadProtocol tx))),
   -- | Latest signed snapshot number
-  hsSnapNSig :: SnapN,
+  hsSnapNSig :: !SnapN,
   -- | Latest confirmed snapshot number
-  hsSnapNConf :: SnapN,
+  hsSnapNConf :: !SnapN,
   -- | UTxO set signed by this node
-  hsUTxOSig :: Set (TxInput tx),
+  hsUTxOSig :: !(Set (TxInput tx)),
   -- | Confirmed UTxO set
-  hsUTxOConf :: Set (TxInput tx),
+  hsUTxOConf :: !(Set (TxInput tx)),
   -- | Latest signed snapshot
-  hsSnapSig :: Snap tx,
+  hsSnapSig :: !(Snap tx),
   -- | Latest confirmed snapshot
-  hsSnapConf :: Snap tx,
+  hsSnapConf :: !(Snap tx),
   -- | Set of txs signed by this node
-  hsTxsSig :: Map (TxRef tx) (TxO tx),
+  hsTxsSig :: !(Map (TxRef tx) (TxO tx)),
   -- | Set of confirmed txs
-  hsTxsConf :: Map (TxRef tx) (TxO tx)
+  hsTxsConf :: !(Map (TxRef tx) (TxO tx)),
+  -- | Set of "in flight" transactions (transactions we have sent that are not
+  -- yet confirmed).
+  hsTxsInflight :: !(Set (TxRef tx))
   }
+-- We'll want to show a node's state for debugging, but we want a custom
+-- instance, suppressing showing the channels (which don't have a Show
+-- instance), and the actual transactions (which would be too vebose -- but we
+-- might change that in the future).
+instance Tx tx => Show (HState m tx) where
+  show s = "HState { "
+    ++ intercalate ", "
+       [
+         "hsSK=" ++ show (hsSK s),
+         "hsVKs=" ++ show (hsVKs s),
+         "hsSnapNSig=" ++ show (hsSnapNSig s),
+         "hsSnapNConf=" ++ show (hsSnapNConf s),
+         "hsUTxOSig=" ++ show (hsUTxOSig s),
+         "hsUTxOConf=" ++ show (hsUTxOConf s),
+         "hsSnapSig=" ++ show (hsSnapSig s),
+         "hsSnapConf=" ++ show (hsSnapConf s),
+         "hsTxsSig=" ++ show (Map.keysSet $ hsTxsSig s),
+         "hsTxsConf=" ++ show (Map.keysSet $ hsTxsConf s),
+         "hsTxsInflight=" ++ show (hsTxsInflight s)
+       ]
+    ++ " }"
 
 hnStateEmpty :: Tx tx => NodeId -> HState m tx
 hnStateEmpty (NodeId i)= HState {
-  hsPartyIndex = i,
   hsSK = SKey i,
   hsVKs = Set.singleton $ VKey i,
   hsChannels = Map.empty,
-  hsSnapNSig = SnapN (-1),
-  hsSnapNConf = SnapN (-1),
+  hsSnapNSig = noSnapN,
+  hsSnapNConf = noSnapN,
   hsUTxOSig = Set.empty,
   hsUTxOConf = Set.empty,
   hsSnapSig = emptySnap,
   hsSnapConf = emptySnap,
   hsTxsSig = Map.empty,
-  hsTxsConf = Map.empty
+  hsTxsConf = Map.empty,
+  hsTxsInflight = Set.empty
   }
 
 -- Protocol Stuff
@@ -198,6 +243,7 @@ type HStateTransformer m tx = HState m tx -> HeadProtocol tx -> Decision m tx
 data TraceHydraEvent tx =
     HydraMessage (TraceMessagingEvent tx)
   | HydraProtocol (TraceProtocolEvent tx)
+  | HydraDebug String
   deriving (Eq, Show)
 
 -- | Tracing messages that are sent/received between nodes.

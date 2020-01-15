@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns #-}
 module HeadNode
   ( newNode,
     connectNodes,
@@ -56,7 +57,9 @@ startNode
        Tx tx)
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
-startNode tracer hn = void $ concurrently (listener tracer hn) (txSender tracer hn)
+startNode tracer hn = void $
+  concurrently (listener tracer hn) $
+  concurrently (txSender tracer hn) (snDaemon tracer hn)
 
 -- | Add a peer, and install a thread that will collect messages from the
 -- channel to the main inbox of the node.
@@ -68,7 +71,7 @@ addPeer hn peerId@(NodeId i) peerChannel = do
   peerHandler <- async protocolHandler
   atomically $ do
     state <- takeTMVar (hnState hn)
-    putTMVar (hnState hn) $
+    putTMVar (hnState hn) $!
       state { hsVKs = Set.insert (VKey i) $ hsVKs state
             , hsChannels = Map.insert peerId peerChannel $ hsChannels state
             }
@@ -111,16 +114,21 @@ listener tracer hn = forever $ do
   where
     messageTracer = contramap HydraMessage tracer
     protocolTracer = contramap HydraProtocol tracer
+    hydraDebugTracer = contramap HydraDebug tracer
     thisId = hcNodeId (hnConf hn)
     applyMessage :: NodeId -> HeadProtocol tx -> m ()
     applyMessage peer ms = do
+      traceWith hydraDebugTracer ("applyMessage " ++ show peer
+                              ++ " " ++ show ms)
       state <- atomically $ takeTMVar (hnState hn)
+      traceWith hydraDebugTracer (" state = " ++ show state)
       case handleMessage (hnConf hn) peer state ms of
         DecApply stateUpdate trace ms' -> do
           -- 'runComp' advances the time by the amount the handler takes,
           -- and unwraps the result
-          state' <- runComp stateUpdate
+          !state' <- runComp stateUpdate
           atomically $ putTMVar (hnState hn) state'
+          traceWith hydraDebugTracer (" state' = " ++ show state')
           traceWith protocolTracer trace
           -- TODO: We _could_ think of adding some parallelism here, by doing
           -- this asynchronously. That would slightly violate the assumption
@@ -166,9 +174,56 @@ listener tracer hn = forever $ do
 
 
 
-txSender :: (MonadAsync m, Tx tx) =>
-  Tracer m (TraceHydraEvent tx)
+txSender
+  :: (MonadAsync m, MonadSTM m,
+       Tx tx)
+  => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 txSender tracer hn = case (hcTxSendStrategy (hnConf hn)) of
-  SendSingleTx tx -> clientMessage tracer hn (New tx)
   SendNoTx -> return ()
+  SendSingleTx tx -> clientMessage tracer hn (New tx)
+  SendTxsDumb txs -> mapM_ (clientMessage tracer hn . New) txs
+  SendTxs limit txs ->
+    let go [] = return ()
+        go (tx:rest) = do
+          atomically $ do
+            s <- takeTMVar (hnState hn)
+            if Set.size (hsTxsInflight s) < limit
+            then
+              putTMVar (hnState hn) $
+                s { hsTxsInflight = txRef tx `Set.insert` hsTxsInflight s }
+            else do
+              putTMVar (hnState hn) s
+              retry
+          clientMessage tracer hn (New tx)
+          go rest
+    in go txs
+
+snDaemon
+  :: forall m tx .
+     (MonadSTM m, MonadAsync m, Tx tx
+     , MonadTimer m
+     )
+  => Tracer m (TraceHydraEvent tx)
+  -> HeadNode m tx -> m ()
+snDaemon tracer hn = case hcSnapshotStrategy conf of
+  NoSnapshots -> return ()
+  SnapAfterNTxs n ->
+    let
+      waitForOurTurn :: SnapN -> STM m SnapN
+      waitForOurTurn lastSn = do
+        s <- readTMVar (hnState hn)
+        let snapN = hsSnapNConf s
+        if ( Map.size (hsTxsConf s) >= n)
+           && ((hcLeaderFun conf) (nextSn snapN) == hcNodeId conf)
+           -- to prevent fillng our inbox with duplicate NewSn messages:
+           && snapN >= lastSn
+          then return $ nextSn snapN
+          else retry
+      doSnapshot :: SnapN -> m ()
+      doSnapshot lastSn = do
+        lastSn' <- atomically (waitForOurTurn lastSn)
+        clientMessage tracer hn NewSn
+        doSnapshot lastSn'
+    in doSnapshot noSnapN
+  where conf = hnConf hn

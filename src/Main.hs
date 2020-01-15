@@ -25,12 +25,24 @@ import Tx.Mock
 dynamicTracer :: Typeable a => Tracer (SimM s) a
 dynamicTracer = Tracer traceM
 
+data ShowDebugMessages =
+    ShowDebugMessages
+  | DontShowDebugMessages
+  deriving Eq
+
 selectTraceHydraEvents
-  :: Trace a -> [(Time, ThreadId (SimM s), TraceHydraEvent MockTx)]
-selectTraceHydraEvents = go
+  :: ShowDebugMessages
+  -> Trace a
+  -> [(Time, ThreadId (SimM s), TraceHydraEvent MockTx)]
+selectTraceHydraEvents showDebugMessages = go
   where
     go (Trace t tid _ (EventLog e) trace)
-     | Just x <- fromDynamic e    = (t,tid,x) : go trace
+     | Just x <- fromDynamic e    =
+         case x of
+           HydraDebug _ -> if showDebugMessages == ShowDebugMessages
+                           then (t,tid,x) : go trace
+                           else             go trace
+           _ ->                 (t,tid,x) : go trace
     go (Trace _ _ _ _ trace)      =         go trace
     go (TraceMainException _ e _) = throw e
     go (TraceDeadlock      _   _) = [] -- expected result in many cases
@@ -40,18 +52,18 @@ main :: IO ()
 main = do
   let tracer = dynamicTracer
   let trace = runSimTrace (twoNodesExample tracer)
-  putStrLn "full trace: "
-  print trace
+  -- putStrLn "full trace: "
+  -- print trace
   putStrLn "trace of TraceProtocolEvent:"
-  print $ selectTraceHydraEvents trace
+  print $ selectTraceHydraEvents DontShowDebugMessages trace
 
 
 twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 twoNodesExample tracer = do
-  node0 <- newNode $ simpleNodeConf 2 0
-  node1 <- newNode $ simpleNodeConf 2 1
+  node0 <- newNode $ simpleNodeConf 2 0 10
+  node1 <- newNode $ simpleNodeConf 2 1 10
   connectNodes simpleChannels node0 node1
   void $ concurrently (startNode tracer node0) (startNode tracer node1)
   where
@@ -61,9 +73,9 @@ threeNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAs
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 threeNodesExample tracer = do
-  node0 <- newNode $ simpleNodeConf 3 0
-  node1 <- newNode $ simpleNodeConf 3 1
-  node2 <- newNode $ simpleNodeConf 3 2
+  node0 <- newNode $ simpleNodeConf 3 0 10
+  node1 <- newNode $ simpleNodeConf 3 1 10
+  node2 <- newNode $ simpleNodeConf 3 2 10
   connectNodes simpleChannels node0 node1
   connectNodes simpleChannels node0 node2
   connectNodes simpleChannels node1 node2
@@ -83,19 +95,27 @@ simpleMsig = MS {
   ms_verify_sn = ms_verify_delayed (millisecondsToDiffTime 7)
 }
 
--- | Node that sends just one transaction. Snapshots are created round-robin.
+-- | Node that sends a bunch of transactions.
+--
+-- Snapshots are created round-robin, every time there is at least one confirmed
+-- transaction.
 simpleNodeConf
   :: Int -- ^ Total number of nodes
   -> Int -- ^ This node number
+  -> Int -- ^ Number of transactions to send
   -> NodeConf MockTx
-simpleNodeConf n i
+simpleNodeConf n i ntx
   | n <= i = error "simpleNodeConf: Node index must be smaller than total number of nodes."
   | otherwise = NodeConf {
       hcNodeId = NodeId i,
-      hcTxSendStrategy = SendSingleTx (MockTx (TxId i) (millisecondsToDiffTime 1)),
+      hcTxSendStrategy = SendTxs 2 txs,
       hcMSig = simpleMsig,
-      hcLeaderFun = \(SnapN s) -> NodeId (s `mod` n)
+      hcLeaderFun = \(SnapN s) -> NodeId (s `mod` n),
+      hcSnapshotStrategy = SnapAfterNTxs 1
       }
+  where
+    -- we make sure that each node sends txs with a unique id.
+    txs = [MockTx (TxId $ n * j + i) (millisecondsToDiffTime 1) | j <- [0..ntx-1]]
 
 millisecondsToDiffTime :: Integer -> DiffTime
 millisecondsToDiffTime = picosecondsToDiffTime . (* 1000000000)

@@ -2,7 +2,7 @@ module HeadNode.Handler
   ( handleMessage
   ) where
 
-import Control.Monad (forever, forM_, void)
+import Control.Monad (void)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 
@@ -88,7 +88,8 @@ handleMessage conf _peer s (SigConfTx txref asig)
         pure $ s {
           hsUTxOConf = hsUTxOConf s `txApplyValid` txoTx txob,
           hsTxsSig = txsSig,
-          hsTxsConf = txsSig
+          hsTxsConf = txsSig,
+          hsTxsInflight = txref `Set.delete` hsTxsInflight s 
           })
     (TPTxConf txref)
     (pure SendNothing)
