@@ -106,7 +106,8 @@ simpleNodeConf n i
       hcNodeId = NodeId i,
       hcTxSendStrategy = SendSingleTx (MockTx (TxId i) (millisecondsToDiffTime 1)),
       hcMSig = simpleMsig,
-      hcLeaderFun = \(SnapN s) -> NodeId (s `mod` n)
+      hcLeaderFun = \(SnapN s) -> NodeId (s `mod` n),
+      hcSnapshotStrategy = SnapAfterNTxs 1
       }
 
 millisecondsToDiffTime :: Integer -> DiffTime

@@ -34,6 +34,9 @@ newtype SnapN = SnapN Int
 nextSn :: SnapN -> SnapN
 nextSn (SnapN n) = SnapN (n + 1)
 
+noSnapN :: SnapN
+noSnapN = SnapN (-1)
+
 -- | Snapshot objects
 data Tx tx => Snap tx = Snap {
   snos :: SnapN,
@@ -45,7 +48,7 @@ data Tx tx => Snap tx = Snap {
 
 emptySnap :: Tx tx => Snap tx
 emptySnap = Snap {
-  snos = SnapN (-1),
+  snos = noSnapN,
   snoO = Set.empty,
   snoT = Set.empty,
   snoS = Set.empty,
@@ -56,6 +59,14 @@ data TxSendStrategy tx =
     SendNoTx
   | SendSingleTx tx
   deriving (Show, Eq)
+
+-- | Strategies for nodes to create snapshots
+data SnapStrategy =
+  -- | No snapshots are created.
+    NoSnapshots
+  -- | After a number of transactions have been confirmed, a snapshot is
+  -- created.
+  | SnapAfterNTxs Int
 
 -- Multi-sig functionality for a given node.
 data Tx tx => MS tx = MS {
@@ -73,7 +84,8 @@ data Tx tx => NodeConf tx = NodeConf {
   hcTxSendStrategy :: TxSendStrategy tx,
   hcMSig :: MS tx,
   -- | Determine who is responsible to create which snapshot.
-  hcLeaderFun :: SnapN -> NodeId
+  hcLeaderFun :: SnapN -> NodeId,
+  hcSnapshotStrategy :: SnapStrategy
   }
 
 data Tx tx => HeadNode m tx = HeadNode {
@@ -132,8 +144,8 @@ hnStateEmpty (NodeId i)= HState {
   hsSK = SKey i,
   hsVKs = Set.singleton $ VKey i,
   hsChannels = Map.empty,
-  hsSnapNSig = SnapN (-1),
-  hsSnapNConf = SnapN (-1),
+  hsSnapNSig = noSnapN,
+  hsSnapNConf = noSnapN,
   hsUTxOSig = Set.empty,
   hsUTxOConf = Set.empty,
   hsSnapSig = emptySnap,

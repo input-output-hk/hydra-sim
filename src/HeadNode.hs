@@ -57,7 +57,9 @@ startNode
        Tx tx)
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
-startNode tracer hn = void $ concurrently (listener tracer hn) (txSender tracer hn)
+startNode tracer hn = void $
+  concurrently (listener tracer hn) $
+  concurrently (txSender tracer hn) (snDaemon tracer hn)
 
 -- | Add a peer, and install a thread that will collect messages from the
 -- channel to the main inbox of the node.
@@ -178,3 +180,32 @@ txSender :: (MonadAsync m, Tx tx) =>
 txSender tracer hn = case (hcTxSendStrategy (hnConf hn)) of
   SendSingleTx tx -> clientMessage tracer hn (New tx)
   SendNoTx -> return ()
+
+snDaemon
+  :: forall m tx .
+     (MonadSTM m, MonadAsync m, Tx tx
+     , MonadTimer m
+     )
+  => Tracer m (TraceHydraEvent tx)
+  -> HeadNode m tx -> m ()
+snDaemon tracer hn = case hcSnapshotStrategy conf of
+  NoSnapshots -> return ()
+  SnapAfterNTxs n ->
+    let
+      waitForOurTurn :: SnapN -> STM m SnapN
+      waitForOurTurn lastSn = do
+        s <- readTMVar (hnState hn)
+        let snapN = hsSnapNConf s
+        if ( Map.size (hsTxsConf s) >= n)
+           && ((hcLeaderFun conf) (nextSn snapN) == hcNodeId conf)
+           -- to prevent fillng our inbox with duplicate NewSn messages:
+           && snapN >= lastSn
+          then return $ nextSn snapN
+          else retry
+      doSnapshot :: SnapN -> m ()
+      doSnapshot lastSn = do
+        lastSn' <- atomically (waitForOurTurn lastSn)
+        clientMessage tracer hn NewSn
+        doSnapshot lastSn'
+    in doSnapshot noSnapN
+  where conf = hnConf hn
