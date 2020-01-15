@@ -136,6 +136,7 @@ listener tracer hn = forever $ do
         DecInvalid comp errmsg -> do
           runComp comp
           traceWith protocolTracer (TPInvalidTransition errmsg)
+          atomically $ putTMVar (hnState hn) state
     sendMessage :: SendMessage tx -> m ()
     sendMessage SendNothing = return ()
     sendMessage (SendTo peer ms)
