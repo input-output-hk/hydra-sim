@@ -84,28 +84,27 @@ data Tx tx => HeadNode m tx = HeadNode {
   }
 
 data Tx tx => HState m tx = HState {
-  hsPartyIndex :: Int,
-  hsSK :: SKey,
+  hsSK :: !SKey,
   -- | Verification keys of all nodes (including this one)
-  hsVKs :: Set VKey,
+  hsVKs :: !(Set VKey),
   -- | Channels for communication with peers.
-  hsChannels :: (Map NodeId (Channel m (HeadProtocol tx))),
+  hsChannels :: !(Map NodeId (Channel m (HeadProtocol tx))),
   -- | Latest signed snapshot number
-  hsSnapNSig :: SnapN,
+  hsSnapNSig :: !SnapN,
   -- | Latest confirmed snapshot number
-  hsSnapNConf :: SnapN,
+  hsSnapNConf :: !SnapN,
   -- | UTxO set signed by this node
-  hsUTxOSig :: Set (TxInput tx),
+  hsUTxOSig :: !(Set (TxInput tx)),
   -- | Confirmed UTxO set
-  hsUTxOConf :: Set (TxInput tx),
+  hsUTxOConf :: !(Set (TxInput tx)),
   -- | Latest signed snapshot
-  hsSnapSig :: Snap tx,
+  hsSnapSig :: !(Snap tx),
   -- | Latest confirmed snapshot
-  hsSnapConf :: Snap tx,
+  hsSnapConf :: !(Snap tx),
   -- | Set of txs signed by this node
-  hsTxsSig :: Map (TxRef tx) (TxO tx),
+  hsTxsSig :: !(Map (TxRef tx) (TxO tx)),
   -- | Set of confirmed txs
-  hsTxsConf :: Map (TxRef tx) (TxO tx)
+  hsTxsConf :: !(Map (TxRef tx) (TxO tx))
   }
 -- We'll want to show a node's state for debugging, but we want a custom
 -- instance, suppressing showing the channels (which don't have a Show
@@ -115,7 +114,6 @@ instance Tx tx => Show (HState m tx) where
   show s = "HState { "
     ++ intercalate ", "
        [
-         "hsPartyIndex=" ++ show (hsPartyIndex s),
          "hsSK=" ++ show (hsSK s),
          "hsVKs=" ++ show (hsVKs s),
          "hsSnapNSig=" ++ show (hsSnapNSig s),
@@ -131,7 +129,6 @@ instance Tx tx => Show (HState m tx) where
 
 hnStateEmpty :: Tx tx => NodeId -> HState m tx
 hnStateEmpty (NodeId i)= HState {
-  hsPartyIndex = i,
   hsSK = SKey i,
   hsVKs = Set.singleton $ VKey i,
   hsChannels = Map.empty,

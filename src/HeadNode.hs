@@ -1,5 +1,6 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns #-}
 module HeadNode
   ( newNode,
     connectNodes,
@@ -68,7 +69,7 @@ addPeer hn peerId@(NodeId i) peerChannel = do
   peerHandler <- async protocolHandler
   atomically $ do
     state <- takeTMVar (hnState hn)
-    putTMVar (hnState hn) $
+    putTMVar (hnState hn) $!
       state { hsVKs = Set.insert (VKey i) $ hsVKs state
             , hsChannels = Map.insert peerId peerChannel $ hsChannels state
             }
@@ -123,7 +124,7 @@ listener tracer hn = forever $ do
         DecApply stateUpdate trace ms' -> do
           -- 'runComp' advances the time by the amount the handler takes,
           -- and unwraps the result
-          state' <- runComp stateUpdate
+          !state' <- runComp stateUpdate
           atomically $ putTMVar (hnState hn) state'
           traceWith hydraDebugTracer (" state' = " ++ show state')
           traceWith protocolTracer trace
