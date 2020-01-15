@@ -13,7 +13,9 @@ import DelayedComp
 
 -- | Abstract transaction.
 class (Eq (TxRef tx), Ord (TxRef tx), Show (TxRef tx),
-       Eq (TxInput tx), Ord (TxInput tx), Show (TxInput tx))
+       Eq (TxInput tx), Ord (TxInput tx), Show (TxInput tx),
+       Show tx
+      )
   => Tx tx where
 
   -- | Transaction reference (i.e., hash)

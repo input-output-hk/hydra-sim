@@ -1,5 +1,6 @@
 module HeadNode.Types where
 
+import Data.List (intercalate)
 import Data.Map (Map)
 import qualified Data.Map as Map
 import Data.Set (Set)
@@ -28,7 +29,7 @@ data Tx tx => TxO tx = TxO
 
 -- | Snapshot Sequence Number
 newtype SnapN = SnapN Int
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 nextSn :: SnapN -> SnapN
 nextSn (SnapN n) = SnapN (n + 1)
@@ -106,6 +107,27 @@ data Tx tx => HState m tx = HState {
   -- | Set of confirmed txs
   hsTxsConf :: Map (TxRef tx) (TxO tx)
   }
+-- We'll want to show a node's state for debugging, but we want a custom
+-- instance, suppressing showing the channels (which don't have a Show
+-- instance), and the actual transactions (which would be too vebose -- but we
+-- might change that in the future).
+instance Tx tx => Show (HState m tx) where
+  show s = "HState { "
+    ++ intercalate ", "
+       [
+         "hsPartyIndex=" ++ show (hsPartyIndex s),
+         "hsSK=" ++ show (hsSK s),
+         "hsVKs=" ++ show (hsVKs s),
+         "hsSnapNSig=" ++ show (hsSnapNSig s),
+         "hsSnapNConf=" ++ show (hsSnapNConf s),
+         "hsUTxOSig=" ++ show (hsUTxOSig s),
+         "hsUTxOConf=" ++ show (hsUTxOConf s),
+         "hsSnapSig=" ++ show (hsSnapSig s),
+         "hsSnapConf=" ++ show (hsSnapConf s),
+         "hsTxsSig=" ++ show (Map.keysSet $ hsTxsSig s),
+         "hsTxsConf=" ++ show (Map.keysSet $ hsTxsConf s)
+       ]
+    ++ " }"
 
 hnStateEmpty :: Tx tx => NodeId -> HState m tx
 hnStateEmpty (NodeId i)= HState {
@@ -198,6 +220,7 @@ type HStateTransformer m tx = HState m tx -> HeadProtocol tx -> Decision m tx
 data TraceHydraEvent tx =
     HydraMessage (TraceMessagingEvent tx)
   | HydraProtocol (TraceProtocolEvent tx)
+  | HydraDebug String
   deriving (Eq, Show)
 
 -- | Tracing messages that are sent/received between nodes.

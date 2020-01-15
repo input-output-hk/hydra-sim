@@ -25,12 +25,24 @@ import Tx.Mock
 dynamicTracer :: Typeable a => Tracer (SimM s) a
 dynamicTracer = Tracer traceM
 
+data ShowDebugMessages =
+    ShowDebugMessages
+  | DontShowDebugMessages
+  deriving Eq
+
 selectTraceHydraEvents
-  :: Trace a -> [(Time, ThreadId (SimM s), TraceHydraEvent MockTx)]
-selectTraceHydraEvents = go
+  :: ShowDebugMessages
+  -> Trace a
+  -> [(Time, ThreadId (SimM s), TraceHydraEvent MockTx)]
+selectTraceHydraEvents showDebugMessages = go
   where
     go (Trace t tid _ (EventLog e) trace)
-     | Just x <- fromDynamic e    = (t,tid,x) : go trace
+     | Just x <- fromDynamic e    =
+         case x of
+           HydraDebug _ -> if showDebugMessages == ShowDebugMessages
+                           then (t,tid,x) : go trace
+                           else             go trace
+           _ ->                 (t,tid,x) : go trace
     go (Trace _ _ _ _ trace)      =         go trace
     go (TraceMainException _ e _) = throw e
     go (TraceDeadlock      _   _) = [] -- expected result in many cases
@@ -43,7 +55,7 @@ main = do
   putStrLn "full trace: "
   print trace
   putStrLn "trace of TraceProtocolEvent:"
-  print $ selectTraceHydraEvents trace
+  print $ selectTraceHydraEvents DontShowDebugMessages trace
 
 
 twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
