@@ -2,7 +2,7 @@ module HeadNode.Handler
   ( handleMessage
   ) where
 
-import Control.Monad (forever, forM_, void)
+import Control.Monad (void)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 

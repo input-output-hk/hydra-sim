@@ -178,8 +178,8 @@ txSender :: (MonadAsync m, Tx tx) =>
   Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 txSender tracer hn = case (hcTxSendStrategy (hnConf hn)) of
-  SendSingleTx tx -> clientMessage tracer hn (New tx)
   SendNoTx -> return ()
+  SendSingleTx tx -> clientMessage tracer hn (New tx)
 
 snDaemon
   :: forall m tx .
