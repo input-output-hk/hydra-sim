@@ -58,6 +58,15 @@ emptySnap = Snap {
 data TxSendStrategy tx =
     SendNoTx
   | SendSingleTx tx
+  -- | This will send the whole list of transactions at once.
+  --
+  -- If you want to send many transactions, this is bound to overflow some
+  -- queues; use SendTxs instead.
+  | SendTxsDumb [tx]
+  -- | @SendTxs limit txs@ will only sends the next transaction when there are
+  -- fewer than @limit@ transactions from the original list in flight (i.e., not
+  -- confirmed yet).
+  | SendTxs Int [tx]
   deriving (Show, Eq)
 
 -- | Strategies for nodes to create snapshots
@@ -116,7 +125,10 @@ data Tx tx => HState m tx = HState {
   -- | Set of txs signed by this node
   hsTxsSig :: !(Map (TxRef tx) (TxO tx)),
   -- | Set of confirmed txs
-  hsTxsConf :: !(Map (TxRef tx) (TxO tx))
+  hsTxsConf :: !(Map (TxRef tx) (TxO tx)),
+  -- | Set of "in flight" transactions (transactions we have sent that are not
+  -- yet confirmed).
+  hsTxsInflight :: !(Set (TxRef tx))
   }
 -- We'll want to show a node's state for debugging, but we want a custom
 -- instance, suppressing showing the channels (which don't have a Show
@@ -135,7 +147,8 @@ instance Tx tx => Show (HState m tx) where
          "hsSnapSig=" ++ show (hsSnapSig s),
          "hsSnapConf=" ++ show (hsSnapConf s),
          "hsTxsSig=" ++ show (Map.keysSet $ hsTxsSig s),
-         "hsTxsConf=" ++ show (Map.keysSet $ hsTxsConf s)
+         "hsTxsConf=" ++ show (Map.keysSet $ hsTxsConf s),
+         "hsTxsInflight=" ++ show (hsTxsInflight s)
        ]
     ++ " }"
 
@@ -151,7 +164,8 @@ hnStateEmpty (NodeId i)= HState {
   hsSnapSig = emptySnap,
   hsSnapConf = emptySnap,
   hsTxsSig = Map.empty,
-  hsTxsConf = Map.empty
+  hsTxsConf = Map.empty,
+  hsTxsInflight = Set.empty
   }
 
 -- Protocol Stuff

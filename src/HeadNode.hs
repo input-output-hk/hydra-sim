@@ -174,12 +174,30 @@ listener tracer hn = forever $ do
 
 
 
-txSender :: (MonadAsync m, Tx tx) =>
-  Tracer m (TraceHydraEvent tx)
+txSender
+  :: (MonadAsync m, MonadSTM m,
+       Tx tx)
+  => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 txSender tracer hn = case (hcTxSendStrategy (hnConf hn)) of
   SendNoTx -> return ()
   SendSingleTx tx -> clientMessage tracer hn (New tx)
+  SendTxsDumb txs -> mapM_ (clientMessage tracer hn . New) txs
+  SendTxs limit txs ->
+    let go [] = return ()
+        go (tx:rest) = do
+          atomically $ do
+            s <- takeTMVar (hnState hn)
+            if Set.size (hsTxsInflight s) < limit
+            then
+              putTMVar (hnState hn) $
+                s { hsTxsInflight = txRef tx `Set.insert` hsTxsInflight s }
+            else do
+              putTMVar (hnState hn) s
+              retry
+          clientMessage tracer hn (New tx)
+          go rest
+    in go txs
 
 snDaemon
   :: forall m tx .

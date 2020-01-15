@@ -88,7 +88,8 @@ handleMessage conf _peer s (SigConfTx txref asig)
         pure $ s {
           hsUTxOConf = hsUTxOConf s `txApplyValid` txoTx txob,
           hsTxsSig = txsSig,
-          hsTxsConf = txsSig
+          hsTxsConf = txsSig,
+          hsTxsInflight = txref `Set.delete` hsTxsInflight s 
           })
     (TPTxConf txref)
     (pure SendNothing)
