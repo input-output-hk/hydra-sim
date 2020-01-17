@@ -1,22 +1,16 @@
-module HeadNode.Handler
+module HydraSim.HeadNode.Handler
   ( handleMessage
   ) where
 
-import Control.Monad (void)
+import           Control.Monad (void)
+import           Control.Monad.Class.MonadTimer
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-
--- imports from io-sim, io-sim-classes, contra-tracer
-
-import Control.Monad.Class.MonadTimer
-
--- imports from this package
-
-import DelayedComp
-import HeadNode.ProtocolFunctions
-import HeadNode.Types
-import MSig.Mock
-import Tx.Class
+import           HydraSim.DelayedComp
+import           HydraSim.MSig.Mock
+import           HydraSim.ProtocolFunctions
+import           HydraSim.Tx.Class
+import           HydraSim.Types
 
 
 -- | This is the actual logic of the protocol

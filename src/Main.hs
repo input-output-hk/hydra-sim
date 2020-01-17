@@ -2,25 +2,23 @@ module Main where
 
 import Control.Exception (throw)
 import Control.Monad (void)
+import Control.Monad.Class.MonadAsync
+import Control.Monad.Class.MonadFork
+import Control.Monad.Class.MonadSTM
+import Control.Monad.Class.MonadSay
+import Control.Monad.Class.MonadTime
+import Control.Monad.Class.MonadTimer
+import Control.Monad.IOSim
+import Control.Tracer
 import Data.Dynamic
 import Data.Time.Clock (picosecondsToDiffTime)
-
--- imports from io-sim, io-sim-classes, contra-tracer
-import Control.Tracer
-import Control.Monad.IOSim
-import Control.Monad.Class.MonadTime
-import Control.Monad.Class.MonadAsync
-import Control.Monad.Class.MonadSTM
-import Control.Monad.Class.MonadFork
-import Control.Monad.Class.MonadTimer
-import Control.Monad.Class.MonadSay
-
--- imports from this package
-import Channel
-import HeadNode
-import HeadNode.Types
-import MSig.Mock
-import Tx.Mock
+import HydraSim.Channel
+import HydraSim.HeadNode
+import HydraSim.MSig.Mock
+import HydraSim.Sized
+import HydraSim.Tx.Mock
+import HydraSim.Types
+import System.Random (RandomGen, mkStdGen, split)
 
 dynamicTracer :: Typeable a => Tracer (SimM s) a
 dynamicTracer = Tracer traceM
@@ -55,34 +53,45 @@ main = do
   -- putStrLn "full trace: "
   -- print trace
   putStrLn "trace of TraceProtocolEvent:"
-  print $ selectTraceHydraEvents DontShowDebugMessages trace
+  mapM_ print $ selectTraceHydraEvents DontShowDebugMessages trace
 
 
-twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
+twoNodesExample :: (MonadTime m, MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 twoNodesExample tracer = do
   node0 <- newNode $ simpleNodeConf 2 0 10
   node1 <- newNode $ simpleNodeConf 2 1 10
-  connectNodes simpleChannels node0 node1
+  connectNodes (delayedChannels prng) node0 node1
   void $ concurrently (startNode tracer node0) (startNode tracer node1)
   where
-    simpleChannels = createConnectedBoundedChannels 100
+    prng = mkStdGen 42
 
-threeNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
+threeNodesExample :: (MonadTime m, MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 threeNodesExample tracer = do
-  node0 <- newNode $ simpleNodeConf 3 0 10
-  node1 <- newNode $ simpleNodeConf 3 1 10
-  node2 <- newNode $ simpleNodeConf 3 2 10
-  connectNodes simpleChannels node0 node1
-  connectNodes simpleChannels node0 node2
-  connectNodes simpleChannels node1 node2
+  node0 <- newNode $ simpleNodeConf 3 0 100
+  node1 <- newNode $ simpleNodeConf 3 1 100
+  node2 <- newNode $ simpleNodeConf 3 2 100
+  connectNodes (delayedChannels prng1) node0 node1
+  connectNodes (delayedChannels prng2) node0 node2
+  connectNodes (delayedChannels prng3) node1 node2
   void $ concurrently (startNode tracer node0) $
     concurrently (startNode tracer node1) (startNode tracer node2)
   where
-    simpleChannels = createConnectedBoundedChannels 100
+    prng = mkStdGen 42
+    (prng1, prng') = split prng
+    (prng2, prng3) = split prng'
+
+delayedChannels
+  :: (MonadSTM m, MonadTime m, MonadTimer m, RandomGen prng,
+     Sized a)
+  => prng -> m (Channel m a, Channel m a)
+delayedChannels =
+  createConnectedDelayChannels (1024*1024)
+  -- TODO: get realistic GSV numbers
+  (millisecondsToDiffTime 10, millisecondsToDiffTime 5, millisecondsToDiffTime 1)
 
 simpleMsig :: MS MockTx
 simpleMsig = MS {
@@ -115,7 +124,10 @@ simpleNodeConf n i ntx
       }
   where
     -- we make sure that each node sends txs with a unique id.
-    txs = [MockTx (TxId $ n * j + i) (millisecondsToDiffTime 1) | j <- [0..ntx-1]]
+    txs = [MockTx (TxId $ n * j + i)
+           (millisecondsToDiffTime 1) -- TODO: check realistic validation times
+           200  -- TODO: check realistic tx sizes
+          | j <- [0..ntx-1]]
 
 millisecondsToDiffTime :: Integer -> DiffTime
 millisecondsToDiffTime = picosecondsToDiffTime . (* 1000000000)

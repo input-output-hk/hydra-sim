@@ -13,7 +13,7 @@ readable traces.
 We use 'Delayedcomp' to account for time that real cryptographic primitives
 might take.
 -}
-module MSig.Mock
+module HydraSim.MSig.Mock
   ( VKey (..), SKey (..), Sig,
     AVKey, ASKey, ASig,
 
@@ -21,19 +21,24 @@ module MSig.Mock
     ms_sign_delayed, ms_asig_delayed, ms_verify_delayed
   ) where
 
-import Data.Set (Set)
+import           Data.Set (Set)
 import qualified Data.Set as Set
-import Data.Time.Clock (DiffTime)
-
-import DelayedComp
+import           Data.Time.Clock (DiffTime)
+import           HydraSim.DelayedComp
+import           HydraSim.Sized
 
 newtype VKey = VKey Int deriving (Eq, Ord, Show)
 newtype SKey = SKey Int deriving (Eq, Ord, Show)
 newtype Sig = Sig Int deriving (Eq, Ord, Show)
+instance Sized Sig where
+  size _ = 66 -- TODO double-check signature size
 
 newtype AVKey = AVKey (Set VKey) deriving (Eq, Ord, Show)
 newtype ASKey = ASKey (Set SKey) deriving (Eq, Ord, Show)
 newtype ASig = ASig (Set Sig) deriving (Eq, Ord, Show)
+instance Sized ASig where
+  size _ = 66 -- TODO double-check signature size
+
 
 ms_avk :: Set VKey -> AVKey
 ms_avk = AVKey

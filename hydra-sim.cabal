@@ -18,20 +18,22 @@ extra-source-files:  CHANGELOG.md
 executable hydra-sim
   hs-source-dirs:      src
   main-is:             Main.hs
-  other-modules:       Channel
-                     , DelayedComp
-                     , HeadNode
-                     , HeadNode.ProtocolFunctions
-                     , HeadNode.Types
-                     , HeadNode.Handler
-                     , Tx.Class
-                     , Tx.Mock
-                     , MSig.Mock
+  other-modules:       HydraSim.Channel
+                     , HydraSim.DelayedComp
+                     , HydraSim.HeadNode
+                     , HydraSim.HeadNode.Handler
+                     , HydraSim.MSig.Mock
+                     , HydraSim.ProtocolFunctions
+                     , HydraSim.Sized
+                     , HydraSim.Tx.Class
+                     , HydraSim.Tx.Mock
+                     , HydraSim.Types
   -- other-extensions:
   build-depends:       base >=4.12 && <4.13
                      , contra-tracer
                      , io-sim
                      , io-sim-classes
+                     , random
                      , time >= 1.8.0.2
                      , containers >= 0.6.0.1
   -- hs-source-dirs:

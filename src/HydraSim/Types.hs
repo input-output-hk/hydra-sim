@@ -1,22 +1,47 @@
-module HeadNode.Types where
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
+module HydraSim.Types
+  ( -- * Nodes in the head protocol
+    NodeId (..),
+    NodeConf (..),
+    HState (..),
+    hStateEmpty,
+    HeadNode (..),
+    -- * Aggregate signatures
+    MS (..),
+    -- * Snapshots
+    SnapN (..), nextSn, noSnapN,
+    -- * Local transaction/snapshot objects
+    TxO (..),
+    Snap (..), emptySnap,
+    -- * strategies
+    TxSendStrategy (..), SnapStrategy (..),
+    -- * Head protocol
+    HeadProtocol (..),
+    Decision (..),
+    SendMessage (..),
+    HStateTransformer,
+    -- * Traces
+    TraceHydraEvent (..),
+    TraceMessagingEvent (..),
+    TraceProtocolEvent (..)
+  ) where
 
-import Data.List (intercalate)
-import Data.Map (Map)
+import           Control.Monad.Class.MonadAsync
+import           Control.Monad.Class.MonadSTM
+import           Data.List (intercalate)
+import           Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Set (Set)
+import           Data.Set (Set)
 import qualified Data.Set as Set
-
-import Control.Monad.Class.MonadAsync
-import Control.Monad.Class.MonadSTM
-
-import Channel
-import DelayedComp
-import MSig.Mock
-import Tx.Class
+import           HydraSim.Channel
+import           HydraSim.DelayedComp
+import           HydraSim.MSig.Mock
+import           HydraSim.Sized
+import           HydraSim.Tx.Class
 
 -- | Identifiers for nodes in the head protocol.
 newtype NodeId = NodeId Int
-  deriving (Show, Ord, Eq)
+  deriving (Show, Ord, Eq, Sized)
 
 -- | Local transaction objects
 data Tx tx => TxO tx = TxO
@@ -29,7 +54,7 @@ data Tx tx => TxO tx = TxO
 
 -- | Snapshot Sequence Number
 newtype SnapN = SnapN Int
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Sized)
 
 nextSn :: SnapN -> SnapN
 nextSn (SnapN n) = SnapN (n + 1)
@@ -77,7 +102,7 @@ data SnapStrategy =
   -- created.
   | SnapAfterNTxs Int
 
--- Multi-sig functionality for a given node.
+-- Multi-sig functionality
 data Tx tx => MS tx = MS {
   ms_sig_tx :: SKey -> tx -> DelayedComp Sig,
   ms_asig_tx :: tx -> Set VKey -> Set Sig -> DelayedComp ASig,
@@ -152,8 +177,8 @@ instance Tx tx => Show (HState m tx) where
        ]
     ++ " }"
 
-hnStateEmpty :: Tx tx => NodeId -> HState m tx
-hnStateEmpty (NodeId i)= HState {
+hStateEmpty :: Tx tx => NodeId -> HState m tx
+hStateEmpty (NodeId i)= HState {
   hsSK = SKey i,
   hsVKs = Set.singleton $ VKey i,
   hsChannels = Map.empty,
@@ -200,6 +225,17 @@ data Tx tx => HeadProtocol tx =
   -- | Provide an aggregate signature for a confirmed snapshot.
   | SigConfSn SnapN ASig
   deriving (Show, Eq)
+instance Tx tx => Sized (HeadProtocol tx) where
+  size (New tx) = messageHeaderSize + size tx
+  size NewSn = messageHeaderSize
+  size (SigReqTx tx) = messageHeaderSize + size tx
+  size (SigAckTx txref sig) = messageHeaderSize + size txref + size sig
+  size (SigConfTx txref asig) = messageHeaderSize + size txref + size asig
+  size (SigReqSn snapN txrefs) = messageHeaderSize + size snapN + sum (Set.map size txrefs)
+  size (SigAckSn snapN sig) = messageHeaderSize + size snapN + size sig
+  size (SigConfSn snapN asig) = messageHeaderSize + size snapN + size asig
+messageHeaderSize :: Int
+messageHeaderSize = 16 -- TODO: is this a realistic overhead?
 
 -- | Decision of the node what to do in response to an event.
 data Decision m tx =
