@@ -111,7 +111,10 @@ simpleNodeConf n i ntx
       }
   where
     -- we make sure that each node sends txs with a unique id.
-    txs = [MockTx (TxId $ n * j + i) (millisecondsToDiffTime 1) | j <- [0..ntx-1]]
+    txs = [MockTx (TxId $ n * j + i)
+           (millisecondsToDiffTime 1) -- TODO: check realistic validation times
+           200  -- TODO: check realistic tx sizes
+          | j <- [0..ntx-1]]
 
 millisecondsToDiffTime :: Integer -> DiffTime
 millisecondsToDiffTime = picosecondsToDiffTime . (* 1000000000)

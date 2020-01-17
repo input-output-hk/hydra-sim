@@ -25,14 +25,20 @@ import           Data.Set (Set)
 import qualified Data.Set as Set
 import           Data.Time.Clock (DiffTime)
 import           HydraSim.DelayedComp
+import           HydraSim.Sized
 
 newtype VKey = VKey Int deriving (Eq, Ord, Show)
 newtype SKey = SKey Int deriving (Eq, Ord, Show)
 newtype Sig = Sig Int deriving (Eq, Ord, Show)
+instance Sized Sig where
+  size _ = 66 -- TODO double-check signature size
 
 newtype AVKey = AVKey (Set VKey) deriving (Eq, Ord, Show)
 newtype ASKey = ASKey (Set SKey) deriving (Eq, Ord, Show)
 newtype ASig = ASig (Set Sig) deriving (Eq, Ord, Show)
+instance Sized ASig where
+  size _ = 66 -- TODO double-check signature size
+
 
 ms_avk :: Set VKey -> AVKey
 ms_avk = AVKey

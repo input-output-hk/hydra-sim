@@ -1,3 +1,4 @@
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 module HydraSim.Types
   ( -- * Nodes in the head protocol
     NodeId (..),
@@ -35,11 +36,12 @@ import qualified Data.Set as Set
 import           HydraSim.Channel
 import           HydraSim.DelayedComp
 import           HydraSim.MSig.Mock
+import           HydraSim.Sized
 import           HydraSim.Tx.Class
 
 -- | Identifiers for nodes in the head protocol.
 newtype NodeId = NodeId Int
-  deriving (Show, Ord, Eq)
+  deriving (Show, Ord, Eq, Sized)
 
 -- | Local transaction objects
 data Tx tx => TxO tx = TxO
@@ -52,7 +54,7 @@ data Tx tx => TxO tx = TxO
 
 -- | Snapshot Sequence Number
 newtype SnapN = SnapN Int
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Sized)
 
 nextSn :: SnapN -> SnapN
 nextSn (SnapN n) = SnapN (n + 1)
@@ -223,6 +225,17 @@ data Tx tx => HeadProtocol tx =
   -- | Provide an aggregate signature for a confirmed snapshot.
   | SigConfSn SnapN ASig
   deriving (Show, Eq)
+instance Tx tx => Sized (HeadProtocol tx) where
+  size (New tx) = messageHeaderSize + size tx
+  size NewSn = messageHeaderSize
+  size (SigReqTx tx) = messageHeaderSize + size tx
+  size (SigAckTx txref sig) = messageHeaderSize + size txref + size sig
+  size (SigConfTx txref asig) = messageHeaderSize + size txref + size asig
+  size (SigReqSn snapN txrefs) = messageHeaderSize + size snapN + sum (Set.map size txrefs)
+  size (SigAckSn snapN sig) = messageHeaderSize + size snapN + size sig
+  size (SigConfSn snapN asig) = messageHeaderSize + size snapN + size asig
+messageHeaderSize :: Int
+messageHeaderSize = 16 -- TODO: is this a realistic overhead?
 
 -- | Decision of the node what to do in response to an event.
 data Decision m tx =
