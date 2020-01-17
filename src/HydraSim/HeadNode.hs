@@ -1,37 +1,30 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE BangPatterns #-}
-module HeadNode
+module HydraSim.HeadNode
   ( newNode,
     connectNodes,
     startNode
   ) where
 
-import Control.Monad (forever, forM_, void)
-
+import           Control.Monad (forever, forM_, void)
+import           Control.Monad.Class.MonadAsync
+import           Control.Monad.Class.MonadSTM
+import           Control.Monad.Class.MonadTimer
+import           Control.Tracer
 import qualified Data.Map.Strict as Map
-
 import qualified Data.Set as Set
-
--- imports from io-sim, io-sim-classes, contra-tracer
-import Control.Monad.Class.MonadAsync
-import Control.Monad.Class.MonadSTM
-import Control.Monad.Class.MonadTimer
-import Control.Tracer
-
--- imports from this package
-import Channel
-import DelayedComp
-import HeadNode.Handler (handleMessage)
-
-import HeadNode.Types
-import MSig.Mock
-import Tx.Class
+import           HydraSim.Channel
+import           HydraSim.DelayedComp
+import           HydraSim.HeadNode.Handler (handleMessage)
+import           HydraSim.MSig.Mock
+import           HydraSim.Tx.Class
+import           HydraSim.Types
 
 newNode :: (MonadSTM m, Tx tx) =>
   NodeConf tx -> m (HeadNode m tx)
 newNode conf = do
-  state <- newTMVarM $ hnStateEmpty (hcNodeId conf)
+  state <- newTMVarM $ hStateEmpty (hcNodeId conf)
   inbox <- atomically $ newTBQueue 100 -- TODO: make this configurable
   handlers <- newTVarM Map.empty
   return $ HeadNode {
@@ -216,7 +209,7 @@ snDaemon tracer hn = case hcSnapshotStrategy conf of
         let snapN = hsSnapNConf s
         if ( Map.size (hsTxsConf s) >= n)
            && ((hcLeaderFun conf) (nextSn snapN) == hcNodeId conf)
-           -- to prevent fillng our inbox with duplicate NewSn messages:
+           -- to prevent filling our inbox with duplicate NewSn messages:
            && snapN >= lastSn
           then return $ nextSn snapN
           else retry

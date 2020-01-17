@@ -1,15 +1,17 @@
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
-module Tx.Class where
+module HydraSim.Tx.Class
+  ( Tx (..)
+  , applyValidTxs
+  ) where
 
 
-import Data.Kind (Type)
-import Data.List (foldl')
-import Data.Set (Set)
+import           Data.Kind (Type)
+import           Data.List (foldl')
+import           Data.Set (Set)
 import qualified Data.Set as Set
-
-import DelayedComp
+import           HydraSim.DelayedComp
 
 -- | Abstract transaction.
 class (Eq (TxRef tx), Ord (TxRef tx), Show (TxRef tx),

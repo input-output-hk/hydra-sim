@@ -1,17 +1,16 @@
-module HeadNode.ProtocolFunctions
+module HydraSim.ProtocolFunctions
   ( maxTxos,
     txObj,
     snObj,
     reach
   ) where
 
-import Data.Set (Set)
-import qualified Data.Set as Set
-import Data.Map (Map)
+import           Data.Map (Map)
 import qualified Data.Map as Map
-
-import HeadNode.Types
-import Tx.Class
+import           Data.Set (Set)
+import qualified Data.Set as Set
+import           HydraSim.Tx.Class
+import           HydraSim.Types
 
 
 maxTxos :: Tx tx => Map (TxRef tx) (TxO tx) -> Map (TxRef tx) (TxO tx)

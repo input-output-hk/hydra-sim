@@ -1,4 +1,6 @@
-module Sized where
+module HydraSim.Sized
+  ( Sized (..)
+  ) where
 
 -- | Data that has a certain size in bytes.
 --

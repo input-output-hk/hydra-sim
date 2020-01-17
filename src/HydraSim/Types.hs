@@ -1,18 +1,41 @@
-module HeadNode.Types where
+module HydraSim.Types
+  ( -- * Nodes in the head protocol
+    NodeId (..),
+    NodeConf (..),
+    HState (..),
+    hStateEmpty,
+    HeadNode (..),
+    -- * Aggregate signatures
+    MS (..),
+    -- * Snapshots
+    SnapN (..), nextSn, noSnapN,
+    -- * Local transaction/snapshot objects
+    TxO (..),
+    Snap (..), emptySnap,
+    -- * strategies
+    TxSendStrategy (..), SnapStrategy (..),
+    -- * Head protocol
+    HeadProtocol (..),
+    Decision (..),
+    SendMessage (..),
+    HStateTransformer,
+    -- * Traces
+    TraceHydraEvent (..),
+    TraceMessagingEvent (..),
+    TraceProtocolEvent (..)
+  ) where
 
-import Data.List (intercalate)
-import Data.Map (Map)
+import           Control.Monad.Class.MonadAsync
+import           Control.Monad.Class.MonadSTM
+import           Data.List (intercalate)
+import           Data.Map (Map)
 import qualified Data.Map as Map
-import Data.Set (Set)
+import           Data.Set (Set)
 import qualified Data.Set as Set
-
-import Control.Monad.Class.MonadAsync
-import Control.Monad.Class.MonadSTM
-
-import Channel
-import DelayedComp
-import MSig.Mock
-import Tx.Class
+import           HydraSim.Channel
+import           HydraSim.DelayedComp
+import           HydraSim.MSig.Mock
+import           HydraSim.Tx.Class
 
 -- | Identifiers for nodes in the head protocol.
 newtype NodeId = NodeId Int
@@ -77,7 +100,7 @@ data SnapStrategy =
   -- created.
   | SnapAfterNTxs Int
 
--- Multi-sig functionality for a given node.
+-- Multi-sig functionality
 data Tx tx => MS tx = MS {
   ms_sig_tx :: SKey -> tx -> DelayedComp Sig,
   ms_asig_tx :: tx -> Set VKey -> Set Sig -> DelayedComp ASig,
@@ -152,8 +175,8 @@ instance Tx tx => Show (HState m tx) where
        ]
     ++ " }"
 
-hnStateEmpty :: Tx tx => NodeId -> HState m tx
-hnStateEmpty (NodeId i)= HState {
+hStateEmpty :: Tx tx => NodeId -> HState m tx
+hStateEmpty (NodeId i)= HState {
   hsSK = SKey i,
   hsVKs = Set.singleton $ VKey i,
   hsChannels = Map.empty,

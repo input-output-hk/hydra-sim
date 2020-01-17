@@ -1,11 +1,14 @@
 {-# LANGUAGE TypeFamilies #-}
-module Tx.Mock where
+module HydraSim.Tx.Mock
+  ( MockTx (..),
+    TxRef (..),
+    TxInput
+  ) where
 
 import qualified Data.Set as Set
-import Data.Time.Clock (DiffTime)
-
-import DelayedComp
-import Tx.Class
+import           Data.Time.Clock (DiffTime)
+import           HydraSim.DelayedComp
+import           HydraSim.Tx.Class
 
 -- | A transaction that is always valid, and takes a fixed time to validate.
 data MockTx = MockTx {

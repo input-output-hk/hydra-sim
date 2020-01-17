@@ -1,14 +1,13 @@
 {-# LANGUAGE DeriveFunctor #-}
-module DelayedComp
+module HydraSim.DelayedComp
   ( DelayedComp (..),
 
     delayedComp, promptComp,
     runComp
   ) where
 
-import Data.Time.Clock (DiffTime)
-
 import Control.Monad.Class.MonadTimer
+import Data.Time.Clock (DiffTime)
 
 
 -- | A computation that might take a non-neglible amount of time.

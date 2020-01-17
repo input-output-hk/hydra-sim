@@ -2,21 +2,24 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE NamedFieldPuns #-}
-module Channel where
+module HydraSim.Channel
+  ( Channel (..),
+    mvarsAsChannel,
+    createConnectedChannels,
+    createConnectedBoundedChannels,
+    createConnectedDelayChannels
+  ) where
 
 import Control.Monad (when)
-import Data.Time.Clock (DiffTime,
-                         diffTimeToPicoseconds,
-                         picosecondsToDiffTime)
-import Numeric.Natural
-import System.Random (RandomGen(..), Random(..))
-
--- imports from io-sim, io-sim-classes, contra-traceri
 import Control.Monad.Class.MonadSTM
 import Control.Monad.Class.MonadTime
 import Control.Monad.Class.MonadTimer
-
-import Sized
+import Data.Time.Clock (DiffTime,
+                         diffTimeToPicoseconds,
+                         picosecondsToDiffTime)
+import HydraSim.Sized
+import Numeric.Natural
+import System.Random (RandomGen(..), Random(..))
 
 data Channel m a = Channel {
   send :: a -> m (),

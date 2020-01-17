@@ -2,25 +2,21 @@ module Main where
 
 import Control.Exception (throw)
 import Control.Monad (void)
+import Control.Monad.Class.MonadAsync
+import Control.Monad.Class.MonadFork
+import Control.Monad.Class.MonadSTM
+import Control.Monad.Class.MonadSay
+import Control.Monad.Class.MonadTime
+import Control.Monad.Class.MonadTimer
+import Control.Monad.IOSim
+import Control.Tracer
 import Data.Dynamic
 import Data.Time.Clock (picosecondsToDiffTime)
-
--- imports from io-sim, io-sim-classes, contra-tracer
-import Control.Tracer
-import Control.Monad.IOSim
-import Control.Monad.Class.MonadTime
-import Control.Monad.Class.MonadAsync
-import Control.Monad.Class.MonadSTM
-import Control.Monad.Class.MonadFork
-import Control.Monad.Class.MonadTimer
-import Control.Monad.Class.MonadSay
-
--- imports from this package
-import Channel
-import HeadNode
-import HeadNode.Types
-import MSig.Mock
-import Tx.Mock
+import HydraSim.Channel
+import HydraSim.HeadNode
+import HydraSim.MSig.Mock
+import HydraSim.Tx.Mock
+import HydraSim.Types
 
 dynamicTracer :: Typeable a => Tracer (SimM s) a
 dynamicTracer = Tracer traceM
@@ -55,7 +51,7 @@ main = do
   -- putStrLn "full trace: "
   -- print trace
   putStrLn "trace of TraceProtocolEvent:"
-  print $ selectTraceHydraEvents DontShowDebugMessages trace
+  mapM_ print $ selectTraceHydraEvents DontShowDebugMessages trace
 
 
 twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
