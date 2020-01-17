@@ -24,6 +24,7 @@ executable hydra-sim
                      , HeadNode.ProtocolFunctions
                      , HeadNode.Types
                      , HeadNode.Handler
+                     , Sized
                      , Tx.Class
                      , Tx.Mock
                      , MSig.Mock
@@ -32,6 +33,7 @@ executable hydra-sim
                      , contra-tracer
                      , io-sim
                      , io-sim-classes
+                     , random
                      , time >= 1.8.0.2
                      , containers >= 0.6.0.1
   -- hs-source-dirs:
