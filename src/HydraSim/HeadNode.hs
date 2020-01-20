@@ -71,10 +71,8 @@ addPeer hn peerId@(NodeId i) peerChannel = do
     modifyTVar (hnPeerHandlers hn) $ Map.insert peerId peerHandler
   where
     protocolHandler = forever $ do
-      recv peerChannel >>= \case
-        Nothing -> return ()
-        Just message -> do
-          atomically $ writeTBQueue (hnInbox hn) (peerId, message)
+      (atomically (recv peerChannel)) >>= \message -> do
+        atomically $ writeTBQueue (hnInbox hn) (peerId, message)
 
 -- | Add a message from the client (as opposed to from a node) to the message queue.
 --

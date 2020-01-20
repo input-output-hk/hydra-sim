@@ -56,7 +56,7 @@ main = do
   mapM_ print $ selectTraceHydraEvents DontShowDebugMessages trace
 
 
-twoNodesExample :: (MonadTime m, MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
+twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 twoNodesExample tracer = do
@@ -67,7 +67,7 @@ twoNodesExample tracer = do
   where
     prng = mkStdGen 42
 
-threeNodesExample :: (MonadTime m, MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
+threeNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 threeNodesExample tracer = do
@@ -85,13 +85,15 @@ threeNodesExample tracer = do
     (prng2, prng3) = split prng'
 
 delayedChannels
-  :: (MonadSTM m, MonadTime m, MonadTimer m, RandomGen prng,
+  :: (MonadAsync m, MonadSTM m, MonadTimer m,
+      RandomGen prng,
      Sized a)
   => prng -> m (Channel m a, Channel m a)
-delayedChannels =
-  createConnectedDelayChannels (1024*1024)
-  -- TODO: get realistic GSV numbers
-  (millisecondsToDiffTime 10, millisecondsToDiffTime 5, millisecondsToDiffTime 1)
+delayedChannels prng =
+  createConnectedBoundedVariantDelayedChannels 100
+  -- TODO: get realistic GV numbers
+  (millisecondsToDiffTime 10, millisecondsToDiffTime 5)
+  prng
 
 simpleMsig :: MS MockTx
 simpleMsig = MS {

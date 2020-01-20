@@ -7,23 +7,23 @@ module HydraSim.Channel
     mvarsAsChannel,
     createConnectedChannels,
     createConnectedBoundedChannels,
-    createConnectedDelayChannels
+    createConnectedBoundedDelayedChannels,
+    createConnectedBoundedVariantDelayedChannels
   ) where
 
-import Control.Monad (when)
+import Control.Monad (void)
+import Control.Monad.Class.MonadAsync
 import Control.Monad.Class.MonadSTM
-import Control.Monad.Class.MonadTime
 import Control.Monad.Class.MonadTimer
 import Data.Time.Clock (DiffTime,
-                         diffTimeToPicoseconds,
-                         picosecondsToDiffTime)
-import HydraSim.Sized
+                        diffTimeToPicoseconds,
+                        picosecondsToDiffTime)
 import Numeric.Natural
 import System.Random (RandomGen(..), Random(..))
 
 data Channel m a = Channel {
   send :: a -> m (),
-  recv :: m (Maybe a)
+  recv :: STM m a
   }
 
 -- | Make a 'Channel' from a pair of 'TMVar's, one for reading and one for
@@ -37,7 +37,7 @@ mvarsAsChannel bufferRead bufferWrite =
     Channel{send, recv}
   where
     send x = atomically (putTMVar bufferWrite x)
-    recv   = atomically (Just <$> takeTMVar bufferRead)
+    recv   = takeTMVar bufferRead
 
 
 -- | Create a pair of channels that are connected via one-place buffers.
@@ -77,83 +77,57 @@ createConnectedBoundedChannels sz = do
         Channel{send, recv}
       where
         send x = atomically (writeTBQueue bufferWrite x)
-        recv   = atomically (Just <$> readTBQueue bufferRead)
+        recv   = readTBQueue bufferRead
 
--- | Create a pair of channels that are connected via buffers with delays.
+-- | Like 'createConnectedBoundedChannels', but messages will appear only after
+-- a delay.
+createConnectedBoundedDelayedChannels
+  :: ( MonadSTM m, MonadTimer m, MonadAsync m)
+  => Natural -> DiffTime -> m (Channel m a, Channel m a)
+createConnectedBoundedDelayedChannels sz deltaT = do
+    -- Create two TBQueues to act as the channel buffers (one for each
+    -- direction) and use them to make both ends of a bidirectional channel
+    bufferA <- atomically $ newTBQueue sz
+    bufferB <- atomically $ newTBQueue sz
+
+    return (queuesAsChannel bufferB bufferA,
+            queuesAsChannel bufferA bufferB)
+  where
+    queuesAsChannel bufferRead bufferWrite =
+        Channel{send, recv}
+      where
+        send x = void $ async $
+          do
+          threadDelay deltaT
+          atomically (writeTBQueue bufferWrite x)
+        recv   = readTBQueue bufferRead
+
+-- | Like 'createConnectedBoundedDelayedChannels', but the delay will not be constant.
 --
--- This is a crude approximation of asynchronous network connections where
--- there is delay across the connection, and a limit on in-flight data.
---
--- The buffer size is bounded. It /blocks/ when 'send' would exceed the maximum
--- buffer size. The size per channel element is provided by a function, so this
--- can be size in bytes or a fixed size (e.g. 1 per element), so the max size
--- should be interpreted accordingly.
---
--- The delays are modeled in a simplistic "GSV" style:
---
--- * The G is the minimum latency for a 0 sized message.
--- * The S is the time per message size unit.
--- * The V is the variance in latency, which is assumed to be uniform in the
---   range @0..v@.
---
--- The sender is delayed by S. The receiver is delayed until the arrival time
--- which is G + S + V.
---
--- Note that this implementation does not handle the delays correctly if there
--- are multiple writers or multiple readers.
---
--- This is primarily useful for testing protocols.
---
--- Taken from a PR for the typed-protocols library by Duncan.
-createConnectedDelayChannels
-  :: forall m prng a.
-     (MonadSTM m, MonadTime m, MonadTimer m,
-      RandomGen prng,
-      Sized a)
-  => Int          -- ^ Max size of data in-flight
-  -> (DiffTime, DiffTime, DiffTime) -- ^ GSV
-  -> prng         -- ^ PRNG for sampling V
-  -> m (Channel m a, Channel m a)
-createConnectedDelayChannels maxsize (g, s, v) prng0 = do
+-- Instead, there will be a constant delay @g@, plus a random delay, taken
+-- uniformly from @[0..v]@
+createConnectedBoundedVariantDelayedChannels
+  :: ( MonadSTM m, MonadTimer m, MonadAsync m
+     , RandomGen prng)
+  => Natural -> (DiffTime, DiffTime) -> prng -> m (Channel m a, Channel m a)
+createConnectedBoundedVariantDelayedChannels sz (g, v) prng0 = do
     let (prngA, prngB) = split prng0
-    -- For each direction, create:
-    --  - a TQueue for the messages
-    --  - a TVar Int to track the size in-flight
-    --  - a TVar prng for the sampling from v
-    bufferA <- atomically $ (,,) <$> newTQueue <*> newTVar 0 <*> newTVar prngA
-    bufferB <- atomically $ (,,) <$> newTQueue <*> newTVar 0 <*> newTVar prngB
+
+    -- For each direction, we will create a 'TBQueue' for the messages, and a
+    -- 'TVar' for the pseudo random number generators.
+    bufferA <- atomically $ (,) <$> newTBQueue sz <*> newTVar prngA
+    bufferB <- atomically $ (,) <$> newTBQueue sz <*> newTVar prngB
 
     return (asChannel bufferB bufferA,
             asChannel bufferA bufferB)
   where
-    asChannel (rBuffer, rSize, _rPRNG)
-              (wBuffer, wSize,  wPRNG) =
+    asChannel (rBuffer, _rPRNG) (wBuffer, wPRNG) =
         Channel{send, recv}
       where
-        send x = do
-          atomically $ do
-            sz <- readTVar wSize
-            let !sz' = sz + size x
-            check (sz' <= maxsize)
-            writeTVar wSize sz'
-          threadDelay (s * fromIntegral (size x))
-          now <- getMonotonicTime
-          atomically $ do
-            prng <- readTVar wPRNG
-            let (vsample, prng') = randomR (0, diffTimeToPicoseconds v) prng
-                delay :: DiffTime
-                delay = g + picosecondsToDiffTime vsample
-                arrive = delay `addTime` now
-            writeTVar wPRNG prng'
-            writeTQueue wBuffer (arrive, x)
-
-        recv = do
-          (arrive, x) <- atomically $ readTQueue rBuffer
-          now <- getMonotonicTime
-          let delay = arrive `diffTime` now
-          when (delay > 0) (threadDelay delay)
-          atomically $ do
-            sz <- readTVar rSize
-            let !sz' = sz - size x
-            writeTVar rSize sz'
-          return (Just x)
+        send x = void $ async $ do
+          prng <- atomically (readTVar wPRNG)
+          let (vsample, prng') = randomR (0, diffTimeToPicoseconds v) prng
+          atomically (writeTVar wPRNG prng')
+          threadDelay (g + picosecondsToDiffTime vsample)
+          atomically (writeTBQueue wBuffer x)
+        recv   = readTBQueue rBuffer
