@@ -130,9 +130,11 @@ listener tracer hn = forever $ do
           runComp ms' >>= sendMessage
         DecWait comp -> do
           runComp comp
-          atomically $ do
-            writeTBQueue (hnInbox hn) (peer, ms)
-            putTMVar (hnState hn) state
+          atomically $ putTMVar (hnState hn) state
+          void $ async $ atomically $ isEmptyTBQueue (hnInbox hn) >>= \case
+              True -> retry -- Do not put it back in the queue if the queue is
+                            -- empty, otherwise we'll just loop forever!
+              False -> writeTBQueue (hnInbox hn) (peer, ms)
           traceWith messageTracer (TraceMessageRequeued ms)
         DecInvalid comp errmsg -> do
           runComp comp
