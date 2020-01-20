@@ -64,20 +64,28 @@ Possible Improvements:
 
 -}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE LambdaCase #-}
 module HydraSim.Multiplexer
   ( -- * Types
-    Multiplexer (..),
-    MessageEdge (..),
+    Multiplexer, MessageEdge,
+    -- * Create new multiplexer
+    newMultiplexer,
     -- * Connect nodes
     connectSymmetric,
     -- * Send messages
     sendTo,
+    multicast,
+    -- * Messages within a node
+    sendToSelf,
+    reenqueue,
+    -- * Receive messages
+    getMessage,
     -- * Start threads to send and receive messages
     startMultiplexer
   )
 where
 
-import           Control.Monad (forever, void)
+import           Control.Monad (forever, void, forM_)
 import           Control.Monad.Class.MonadAsync
 import           Control.Monad.Class.MonadSTM
 import           Control.Monad.Class.MonadThrow
@@ -112,16 +120,34 @@ data Multiplexer m a = Multiplexer {
   mpReadCapacity :: Size -> DiffTime
   }
 
+newMultiplexer
+  :: MonadSTM m
+  => Natural
+  -> Natural
+  -> (Size -> DiffTime)
+  -> (Size -> DiffTime)
+  -> m (Multiplexer m a)
+newMultiplexer outBufferSize inBufferSize writeCapacity readCapacity = do
+  outQueue <- atomically $ newTBQueue outBufferSize
+  inQueue <- atomically $ newTBQueue inBufferSize
+  channels <- atomically $ newTVar (Map.empty)
+  return $ Multiplexer {
+    mpOutQueue = outQueue,
+    mpInQueue = inQueue,
+    mpChannels = channels,
+    mpWriteCapacity = writeCapacity,
+    mpReadCapacity = readCapacity
+    }
+
 -- | Connect two nodes, with a symmetric delay caused by the distance between them.
 connectSymmetric
   :: (MonadSTM m, MonadTimer m, MonadAsync m)
-  => Natural
-  -> DiffTime
+  => m (Channel m (MessageEdge a), Channel m (MessageEdge a))
   -> (NodeId, Multiplexer m a)
   -> (NodeId, Multiplexer m a)
   -> m ()
-connectSymmetric sz deltaT (nodeId, mp) (nodeId', mp') = do
-  (ch, ch') <- createConnectedBoundedDelayedChannels sz deltaT
+connectSymmetric createChannels (nodeId, mp) (nodeId', mp') = do
+  (ch, ch') <- createChannels
   atomically $ do
     modifyTVar (mpChannels mp) $ \chs ->
       Map.insert nodeId' ch' chs
@@ -131,7 +157,7 @@ connectSymmetric sz deltaT (nodeId, mp) (nodeId', mp') = do
 -- | Start the multiplexer.
 --
 -- Once the multiplexer is started, messages can be sent with 'sendTo', and
--- received by reading from the 'mpInQueue'.
+-- received by reading from the 'mpInQueue', via 'getMessage'.
 startMultiplexer
   ::( MonadSTM m, MonadThrow m, MonadTimer m, MonadAsync m,
      Sized a)
@@ -144,14 +170,72 @@ startMultiplexer tracer mp = void $
 -- | Place a message in the outgoing queue, so that it will be sent by
 -- 'messageSender' once the network interface has capacity.
 sendTo
-  :: ( MonadSTM m,
-       Sized a)
+  :: (MonadSTM m, Sized a)
   => Multiplexer m a
   -> NodeId
   -> a
   -> m ()
 sendTo mp peer ms =
   atomically $ writeTBQueue (mpOutQueue mp) (peer, ms)
+
+-- | Multicast sends a message to all peers, /and/ to the sending node as well.
+--
+-- Sending to self happens instantaneously, and does not consume netowrking
+-- resources.
+multicast
+  :: (MonadSTM m, Sized a)
+  => Tracer m (TraceMultiplexer a)
+  -> Multiplexer m a
+  -> NodeId -- ^ 'NodeId' of this node
+  -> a
+  -> m ()
+multicast tracer mp nodeId ms = do
+  traceWith tracer $ MPMulticast ms
+  atomically $ do
+    peers <- Map.keys <$> readTVar (mpChannels mp)
+    forM_ peers $ \peer -> writeTBQueue (mpOutQueue mp) (peer, ms)
+    writeTBQueue (mpInQueue mp) (nodeId, ms)
+
+-- | Place a message directly into the 'mpInQueue'.
+--
+-- Used when nodes send messages to themselves. This happens instantatneous, and
+-- does not consume any networking resources.
+sendToSelf
+  :: (MonadSTM m)
+  => Tracer m (TraceMultiplexer a)
+  -> Multiplexer m a
+  -> NodeId -- ^ 'NodeId' of this node
+  -> a
+  -> m ()
+sendToSelf tracer mp nodeId ms = do
+  traceWith tracer $ MPSendSelf nodeId ms
+  atomically $ writeTBQueue (mpInQueue mp) (nodeId, ms)
+
+-- | Put a message back in the local 'mpInQueue', to be processed later.
+--
+-- In case 'mpInQueue' is currently empty, this will wait (in a non-blocking
+-- manner) until another message arrives.
+reenqueue
+  :: (MonadSTM m, MonadAsync m)
+  => Tracer m (TraceMultiplexer a)
+  -> Multiplexer m a
+  -> (NodeId, a)
+  -> m ()
+reenqueue tracer mp (peer, ms) = void $ async $ do
+  atomically $ (isEmptyTBQueue (mpInQueue mp)) >>= \case
+    True -> retry -- Do not put it back in the queue if the queue is empty,
+                  -- otherwise we'll just loop forever!
+    False -> writeTBQueue (mpInQueue mp) (peer, ms)
+  traceWith tracer $ MPReenqueue peer ms
+
+-- | Retrieve the next message in the 'mpInQueue'.
+--
+-- This is an STM action that will block until a message is availble.
+getMessage
+  :: (MonadSTM m)
+  => Multiplexer m a
+  -> STM m (NodeId, a)
+getMessage mp = readTBQueue $ mpInQueue mp
 
 -- | This is the thread that sends messages in the 'mpOutQueue' to peers.
 messageSender

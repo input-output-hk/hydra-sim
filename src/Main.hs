@@ -8,6 +8,7 @@ import Control.Monad.Class.MonadSTM
 import Control.Monad.Class.MonadSay
 import Control.Monad.Class.MonadTime
 import Control.Monad.Class.MonadTimer
+import Control.Monad.Class.MonadThrow
 import Control.Monad.IOSim
 import Control.Tracer
 import Data.Dynamic
@@ -57,24 +58,26 @@ main = do
   mapM_ print $ selectTraceHydraEvents DontShowDebugMessages trace
 
 
-twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
+twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m,
+                   MonadThrow m)
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 twoNodesExample tracer = do
-  node0 <- newNode $ simpleNodeConf 2 0 10
-  node1 <- newNode $ simpleNodeConf 2 1 10
+  node0 <- newNode (simpleNodeConf 2 0 10) (mBytePerSecond 10) (mBytePerSecond 10)
+  node1 <- newNode (simpleNodeConf 2 1 10) (mBytePerSecond 10) (mBytePerSecond 10)
   connectNodes (delayedChannels prng) node0 node1
   void $ concurrently (startNode tracer node0) (startNode tracer node1)
   where
     prng = mkStdGen 42
 
-threeNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
+threeNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m,
+                     MonadThrow m)
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 threeNodesExample tracer = do
-  node0 <- newNode $ simpleNodeConf 3 0 100
-  node1 <- newNode $ simpleNodeConf 3 1 100
-  node2 <- newNode $ simpleNodeConf 3 2 100
+  node0 <- newNode (simpleNodeConf 3 0 100) (mBytePerSecond 10) (mBytePerSecond 10)
+  node1 <- newNode (simpleNodeConf 3 1 100) (mBytePerSecond 10) (mBytePerSecond 10)
+  node2 <- newNode (simpleNodeConf 3 2 100) (mBytePerSecond 10) (mBytePerSecond 10)
   connectNodes (delayedChannels prng1) node0 node1
   connectNodes (delayedChannels prng2) node0 node2
   connectNodes (delayedChannels prng3) node1 node2
@@ -87,8 +90,7 @@ threeNodesExample tracer = do
 
 delayedChannels
   :: (MonadAsync m, MonadSTM m, MonadTimer m,
-      RandomGen prng,
-     Sized a)
+      RandomGen prng)
   => prng -> m (Channel m a, Channel m a)
 delayedChannels prng =
   createConnectedBoundedVariantDelayedChannels 100
@@ -134,3 +136,7 @@ simpleNodeConf n i ntx
 
 millisecondsToDiffTime :: Integer -> DiffTime
 millisecondsToDiffTime = picosecondsToDiffTime . (* 1000000000)
+
+mBytePerSecond :: Integer -> Size -> DiffTime
+mBytePerSecond rate (Size b) = picosecondsToDiffTime $
+  (fromIntegral b) * 1000 * 1000 * 1000 * 1000 `div` (1024 * 1024 * rate)

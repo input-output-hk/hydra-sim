@@ -36,7 +36,7 @@ txObj txsConf k tx = TxO {
 
 snObj
   :: Tx tx
-  => HState m tx
+  => HState tx
   -> SnapN
   -> Set (TxInput tx)
   -> Set (TxRef tx)

@@ -5,7 +5,6 @@ module HydraSim.Types
     NodeConf (..),
     HState (..),
     hStateEmpty,
-    HeadNode (..),
     -- * Aggregate signatures
     MS (..),
     -- * Snapshots
@@ -24,14 +23,11 @@ module HydraSim.Types
     TraceProtocolEvent (..)
   ) where
 
-import           Control.Monad.Class.MonadAsync
-import           Control.Monad.Class.MonadSTM
 import           Data.List (intercalate)
 import           Data.Map (Map)
 import qualified Data.Map as Map
 import           Data.Set (Set)
 import qualified Data.Set as Set
-import           HydraSim.Channel
 import           HydraSim.DelayedComp
 import           HydraSim.MSig.Mock
 import           HydraSim.Sized
@@ -120,19 +116,10 @@ data Tx tx => NodeConf tx = NodeConf {
   hcSnapshotStrategy :: SnapStrategy
   }
 
-data Tx tx => HeadNode m tx = HeadNode {
-  hnConf :: NodeConf tx,
-  hnState :: TMVar m (HState m tx),
-  hnInbox :: TBQueue m (NodeId, HeadProtocol tx),
-  hnPeerHandlers :: TVar m (Map NodeId (Async m ()))
-  }
-
-data Tx tx => HState m tx = HState {
+data Tx tx => HState tx = HState {
   hsSK :: !SKey,
   -- | Verification keys of all nodes (including this one)
   hsVKs :: !(Set VKey),
-  -- | Channels for communication with peers.
-  hsChannels :: !(Map NodeId (Channel m (HeadProtocol tx))),
   -- | Latest signed snapshot number
   hsSnapNSig :: !SnapN,
   -- | Latest confirmed snapshot number
@@ -157,7 +144,7 @@ data Tx tx => HState m tx = HState {
 -- instance, suppressing showing the channels (which don't have a Show
 -- instance), and the actual transactions (which would be too vebose -- but we
 -- might change that in the future).
-instance Tx tx => Show (HState m tx) where
+instance Tx tx => Show (HState tx) where
   show s = "HState { "
     ++ intercalate ", "
        [
@@ -175,11 +162,10 @@ instance Tx tx => Show (HState m tx) where
        ]
     ++ " }"
 
-hStateEmpty :: Tx tx => NodeId -> HState m tx
+hStateEmpty :: Tx tx => NodeId -> HState tx
 hStateEmpty (NodeId i)= HState {
   hsSK = SKey i,
   hsVKs = Set.singleton $ VKey i,
-  hsChannels = Map.empty,
   hsSnapNSig = noSnapN,
   hsSnapNConf = noSnapN,
   hsUTxOSig = Set.empty,
@@ -236,7 +222,7 @@ messageHeaderSize :: Size
 messageHeaderSize = 16 -- TODO: is this a realistic overhead?
 
 -- | Decision of the node what to do in response to an event.
-data Decision m tx =
+data Decision tx =
   -- | The event is invalid. Since the check might take some time, this involves
   -- a 'DelayedComp'.
     DecInvalid (DelayedComp ()) String
@@ -251,7 +237,7 @@ data Decision m tx =
       --
       -- The 'DelayedComp' should include both the time taken to compute the new
       -- state, and also any time used for validation checks.
-      decisionState :: DelayedComp (HState m tx),
+      decisionState :: DelayedComp (HState tx),
       -- | Trace of the decision
       decisionTrace :: TraceProtocolEvent tx,
       -- | I addition to updating the local state, some events also trigger
@@ -271,7 +257,7 @@ data SendMessage tx =
 -- | A function that encodes a response to an event
 --
 -- It takes a state and a message, and produces a 'Decision'
-type HStateTransformer m tx = HState m tx -> HeadProtocol tx -> Decision m tx
+type HStateTransformer tx = HState tx -> HeadProtocol tx -> Decision tx
 
 -- | Tracing how the node state changes as transactions are acknowledged, and
 -- snapshots are produced.

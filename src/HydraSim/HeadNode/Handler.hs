@@ -3,7 +3,6 @@ module HydraSim.HeadNode.Handler
   ) where
 
 import           Control.Monad (void)
-import           Control.Monad.Class.MonadTimer
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import           HydraSim.DelayedComp
@@ -15,11 +14,10 @@ import           HydraSim.Types
 
 -- | This is the actual logic of the protocol
 handleMessage
-  :: (MonadTimer m, Tx tx)
+  :: Tx tx
   => NodeConf tx
   -> NodeId
-  -> HStateTransformer m tx
-
+  -> HStateTransformer tx
 handleMessage conf _peer s (New tx)
   | isValid = DecApply
     (validComp >> pure s)
