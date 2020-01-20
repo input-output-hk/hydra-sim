@@ -23,8 +23,12 @@ executable hydra-sim
                      , HydraSim.HeadNode
                      , HydraSim.HeadNode.Handler
                      , HydraSim.MSig.Mock
+                     , HydraSim.Multiplexer
+                     , HydraSim.Multiplexer.Exception
+                     , HydraSim.Multiplexer.Trace
                      , HydraSim.ProtocolFunctions
                      , HydraSim.Sized
+                     , HydraSim.Trace
                      , HydraSim.Tx.Class
                      , HydraSim.Tx.Mock
                      , HydraSim.Types

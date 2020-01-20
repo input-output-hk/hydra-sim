@@ -16,7 +16,7 @@ import           HydraSim.Tx.Class
 data MockTx = MockTx {
   mtxRef :: TxRef MockTx,
   mtxValidationDelay :: DiffTime,
-  mtxSize :: Int
+  mtxSize :: Size
 } deriving Show
 
 instance Tx MockTx where

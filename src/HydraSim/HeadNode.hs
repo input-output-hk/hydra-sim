@@ -18,6 +18,7 @@ import           HydraSim.Channel
 import           HydraSim.DelayedComp
 import           HydraSim.HeadNode.Handler (handleMessage)
 import           HydraSim.MSig.Mock
+import           HydraSim.Trace
 import           HydraSim.Tx.Class
 import           HydraSim.Types
 

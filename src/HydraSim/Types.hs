@@ -21,8 +21,6 @@ module HydraSim.Types
     SendMessage (..),
     HStateTransformer,
     -- * Traces
-    TraceHydraEvent (..),
-    TraceMessagingEvent (..),
     TraceProtocolEvent (..)
   ) where
 
@@ -234,7 +232,7 @@ instance Tx tx => Sized (HeadProtocol tx) where
   size (SigReqSn snapN txrefs) = messageHeaderSize + size snapN + sum (Set.map size txrefs)
   size (SigAckSn snapN sig) = messageHeaderSize + size snapN + size sig
   size (SigConfSn snapN asig) = messageHeaderSize + size snapN + size asig
-messageHeaderSize :: Int
+messageHeaderSize :: Size
 messageHeaderSize = 16 -- TODO: is this a realistic overhead?
 
 -- | Decision of the node what to do in response to an event.
@@ -274,22 +272,6 @@ data SendMessage tx =
 --
 -- It takes a state and a message, and produces a 'Decision'
 type HStateTransformer m tx = HState m tx -> HeadProtocol tx -> Decision m tx
-
--- | Traces in the simulation
-data TraceHydraEvent tx =
-    HydraMessage (TraceMessagingEvent tx)
-  | HydraProtocol (TraceProtocolEvent tx)
-  | HydraDebug String
-  deriving (Eq, Show)
-
--- | Tracing messages that are sent/received between nodes.
-data TraceMessagingEvent tx =
-    TraceMessageSent NodeId (HeadProtocol tx)
-  | TraceMessageMulticast (HeadProtocol tx)
-  | TraceMessageClient (HeadProtocol tx)
-  | TraceMessageReceived NodeId (HeadProtocol tx)
-  | TraceMessageRequeued (HeadProtocol tx)
-  deriving (Eq, Show)
 
 -- | Tracing how the node state changes as transactions are acknowledged, and
 -- snapshots are produced.

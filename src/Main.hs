@@ -16,6 +16,7 @@ import HydraSim.Channel
 import HydraSim.HeadNode
 import HydraSim.MSig.Mock
 import HydraSim.Sized
+import HydraSim.Trace
 import HydraSim.Tx.Mock
 import HydraSim.Types
 import System.Random (RandomGen, mkStdGen, split)
