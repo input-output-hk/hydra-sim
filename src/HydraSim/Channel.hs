@@ -125,9 +125,11 @@ createConnectedBoundedVariantDelayedChannels sz (g, v) prng0 = do
         Channel{send, recv}
       where
         send x = void $ async $ do
-          prng <- atomically (readTVar wPRNG)
-          let (vsample, prng') = randomR (0, diffTimeToPicoseconds v) prng
-          atomically (writeTVar wPRNG prng')
+          vsample <- atomically $ do
+            prng <- (readTVar wPRNG)
+            let (vsample, prng') = randomR (0, diffTimeToPicoseconds v) prng
+            writeTVar wPRNG prng'
+            return vsample
           threadDelay (g + picosecondsToDiffTime vsample)
           atomically (writeTBQueue wBuffer x)
         recv   = readTBQueue rBuffer
