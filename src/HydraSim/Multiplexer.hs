@@ -43,7 +43,8 @@ We model sending and receiving a message as follows:
 - Each 'Channel' will have a specified delay between a message being sent and
   received.
 
-  This allows us to model the network delay due to geographical distribution.
+  This allows us to model the network delay due to geographical distribution, as
+  well as variance (see 'createConnectedDelayChannels').
 
 - On the receiving side, we again model contention by having one thread that
   listens to all incoming channels.
@@ -56,8 +57,6 @@ We model sending and receiving a message as follows:
     the 'NodeId' of the sending node).
 
 Possible Improvements:
-
-- Add some variance to the network delay.
 
 - If messages do not fit the current TCP window, the network delay will
   increase. We do not model this yet.
