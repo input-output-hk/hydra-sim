@@ -109,6 +109,7 @@ data MessageEdge a =
   -- (and ensures) that we can only act upon a message once we have received it
   -- completely.
   | Trailing a
+    deriving Show
 
 data Multiplexer m a = Multiplexer {
   -- | Queue for outbound messages.
@@ -165,9 +166,9 @@ connect createChannels (nodeId, mp) (nodeId', mp') = do
   (ch, ch') <- createChannels
   atomically $ do
     modifyTVar (mpChannels mp) $ \chs ->
-      Map.insert nodeId' ch' chs
+      Map.insert nodeId' ch chs
     modifyTVar (mpChannels mp') $ \chs ->
-      Map.insert nodeId ch chs
+      Map.insert nodeId ch' chs
 
 -- | Start the multiplexer.
 --

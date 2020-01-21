@@ -59,7 +59,7 @@ main = do
 
 
 twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m,
-                   MonadThrow m)
+                   MonadThrow m, MonadTime m)
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 twoNodesExample tracer = do
@@ -71,7 +71,7 @@ twoNodesExample tracer = do
     prng = mkStdGen 42
 
 threeNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m,
-                     MonadThrow m)
+                     MonadThrow m, MonadTime m)
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 threeNodesExample tracer = do
@@ -89,11 +89,11 @@ threeNodesExample tracer = do
     (prng2, prng3) = split prng'
 
 delayedChannels
-  :: (MonadAsync m, MonadSTM m, MonadTimer m,
-      RandomGen prng)
+  :: (MonadAsync m, MonadSTM m, MonadTimer m, MonadTime m,
+      RandomGen prng, Show a)
   => prng -> m (Channel m a, Channel m a)
 delayedChannels prng =
-  createConnectedBoundedVariantDelayedChannels 100
+  createConnectedDelayChannels
   -- TODO: get realistic GV numbers
   (millisecondsToDiffTime 10, millisecondsToDiffTime 5)
   prng
