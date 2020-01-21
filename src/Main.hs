@@ -137,6 +137,10 @@ simpleNodeConf n i ntx
 millisecondsToDiffTime :: Integer -> DiffTime
 millisecondsToDiffTime = picosecondsToDiffTime . (* 1000000000)
 
-mBytePerSecond :: Integer -> Size -> DiffTime
+-- | Data rate of 'n' megabytes per second
+mBytePerSecond
+  :: Integer
+  -- ^ @n@
+  -> Size -> DiffTime
 mBytePerSecond rate (Size b) = picosecondsToDiffTime $
   (fromIntegral b) * 1000 * 1000 * 1000 * 1000 `div` (1024 * 1024 * rate)

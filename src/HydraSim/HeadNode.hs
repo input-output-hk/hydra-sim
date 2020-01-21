@@ -2,7 +2,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE BangPatterns #-}
 module HydraSim.HeadNode
-  ( newNode,
+  ( HeadNode,
+    newNode,
     connectNodes,
     startNode
   ) where
@@ -26,17 +27,27 @@ import           HydraSim.Trace
 import           HydraSim.Tx.Class
 import           HydraSim.Types
 
+-- | A node in the head protocol.
 data Tx tx => HeadNode m tx = HeadNode {
+  -- | Static configuration
   hnConf :: NodeConf tx,
+  -- | Current local state
   hnState :: TMVar m (HState tx),
+  -- | A 'Multiplexer' to handle communication with other nodes.
   hnMultiplexer :: Multiplexer m (HeadProtocol tx)
   }
 
+-- | Set up a new node to participate in the head protocol.
 newNode
   :: (MonadSTM m, Tx tx)
   => NodeConf tx
   -> (Size -> DiffTime)
+  -- ^ Write capacity of the node's network device.
+  --
+  -- Determines how much time it takes to serialise and send a message of a
+  -- given size.
   -> (Size -> DiffTime)
+  -- ^ Read capacity of the node's network device.
   -> m (HeadNode m tx)
 newNode conf writeCapacity readCapacity = do
   state <- newTMVarM $ hStateEmpty (hcNodeId conf)
@@ -48,8 +59,9 @@ newNode conf writeCapacity readCapacity = do
     hnMultiplexer = multiplexer
     }
 
+-- | Connect two nodes.
 connectNodes
-  :: (MonadAsync m, MonadTimer m,
+  :: forall m tx . (MonadAsync m, MonadTimer m,
       Tx tx)
   => m (Channel m (MessageEdge (HeadProtocol tx)),
         Channel m (MessageEdge (HeadProtocol tx)))
@@ -57,12 +69,23 @@ connectNodes
   -> HeadNode m tx
   -> m ()
 connectNodes createChannels node node' = do
-  connectSymmetric createChannels
+  connect createChannels
     (hcNodeId (hnConf node), hnMultiplexer node)
     (hcNodeId (hnConf node'), hnMultiplexer node')
   addPeer node (hcNodeId $ hnConf node')
   addPeer node' (hcNodeId $ hnConf node)
+  where
+    addPeer :: HeadNode m tx -> NodeId -> m ()
+    addPeer hn (NodeId i) = atomically $ do
+      state <- takeTMVar (hnState hn)
+      putTMVar (hnState hn) $!
+        state { hsVKs = Set.insert (VKey i) $ hsVKs state }
 
+-- | Start a node.
+--
+-- This starts the multiplexer, the event loop handling messages, and threads
+-- for sending transactions and making snapshots, according to the strategies
+-- specified in the node config.
 startNode
   :: (MonadSTM m, MonadTimer m, MonadAsync m, MonadThrow m,
        Tx tx)
@@ -74,18 +97,6 @@ startNode tracer hn = void $
   concurrently (txSender tracer hn) (snDaemon tracer hn)
   where
     mpTracer = contramap HydraMessage tracer
-
--- | Add a peer, and install a thread that will collect messages from the
--- channel to the main inbox of the node.
-addPeer
-  :: (MonadSTM m,
-           Tx tx)
-  => HeadNode m tx -> NodeId -> m ()
-addPeer hn (NodeId i) = do
-  atomically $ do
-    state <- takeTMVar (hnState hn)
-    putTMVar (hnState hn) $!
-      state { hsVKs = Set.insert (VKey i) $ hsVKs state }
 
 -- | Add a message from the client (as opposed to from a node) to the message queue.
 --
@@ -151,7 +162,7 @@ listener tracer hn = forever $ do
     sendMessage (SendTo peer ms)
       -- messages to the same node are just added to the inbox directly, without
       -- going over the network
-      | peer == thisId = sendToSelf mpTracer mplex peer ms
+      | peer == thisId = sendToSelf mpTracer mplex thisId ms
       | otherwise = sendTo mplex peer ms
     sendMessage (Multicast ms) =
       multicast mpTracer mplex thisId ms

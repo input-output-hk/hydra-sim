@@ -68,10 +68,10 @@ Possible Improvements:
 module HydraSim.Multiplexer
   ( -- * Types
     Multiplexer, MessageEdge,
-    -- * Create new multiplexer
+    -- * Setup
     newMultiplexer,
-    -- * Connect nodes
-    connectSymmetric,
+    connect,
+    startMultiplexer,
     -- * Send messages
     sendTo,
     multicast,
@@ -79,9 +79,7 @@ module HydraSim.Multiplexer
     sendToSelf,
     reenqueue,
     -- * Receive messages
-    getMessage,
-    -- * Start threads to send and receive messages
-    startMultiplexer
+    getMessage
   )
 where
 
@@ -113,19 +111,32 @@ data MessageEdge a =
   | Trailing a
 
 data Multiplexer m a = Multiplexer {
+  -- | Queue for outbound messages.
   mpOutQueue :: TBQueue m (NodeId, a),
+  -- | Queue for inbound messages.
   mpInQueue :: TBQueue m (NodeId, a),
+  -- | Map holding a bidirectional 'Channel' to per peer.
   mpChannels :: TVar m (Map NodeId (Channel m (MessageEdge a))),
+  -- |Write capacity of the network interface
+  --
+  -- Determines how much time it takes to serialise and send a message of a
+  -- given size.
   mpWriteCapacity :: Size -> DiffTime,
+  -- | Read capacity
   mpReadCapacity :: Size -> DiffTime
   }
 
+-- | Create a new 'Multiplexer'.
 newMultiplexer
   :: MonadSTM m
-  => Natural
-  -> Natural
+  => Natural -- ^ Buffer size for outbound message queue
+  -> Natural -- ^ Buffer size for incoming message queue
   -> (Size -> DiffTime)
-  -> (Size -> DiffTime)
+  -- ^ Write capacity
+  --
+  -- Determines how much time it takes to serialise and send a message of a
+  -- given size.
+  -> (Size -> DiffTime) -- ^ Read capacity.
   -> m (Multiplexer m a)
 newMultiplexer outBufferSize inBufferSize writeCapacity readCapacity = do
   outQueue <- atomically $ newTBQueue outBufferSize
@@ -139,14 +150,18 @@ newMultiplexer outBufferSize inBufferSize writeCapacity readCapacity = do
     mpReadCapacity = readCapacity
     }
 
--- | Connect two nodes, with a symmetric delay caused by the distance between them.
-connectSymmetric
+-- | Connect two nodes.
+connect
   :: (MonadSTM m, MonadTimer m, MonadAsync m)
   => m (Channel m (MessageEdge a), Channel m (MessageEdge a))
+  -- ^ Creates a pair of connected channels.
+  --
+  -- The channels are responsible for adding the delay caused by the messages
+  -- propagating through the network.
   -> (NodeId, Multiplexer m a)
   -> (NodeId, Multiplexer m a)
   -> m ()
-connectSymmetric createChannels (nodeId, mp) (nodeId', mp') = do
+connect createChannels (nodeId, mp) (nodeId', mp') = do
   (ch, ch') <- createChannels
   atomically $ do
     modifyTVar (mpChannels mp) $ \chs ->
@@ -156,8 +171,9 @@ connectSymmetric createChannels (nodeId, mp) (nodeId', mp') = do
 
 -- | Start the multiplexer.
 --
--- Once the multiplexer is started, messages can be sent with 'sendTo', and
--- received by reading from the 'mpInQueue', via 'getMessage'.
+-- Once the multiplexer is started, messages can be sent with 'sendTo',
+-- 'multicast', 'sendToSelf', and received by reading from the 'mpInQueue' via
+-- 'getMessage'.
 startMultiplexer
   ::( MonadSTM m, MonadThrow m, MonadTimer m, MonadAsync m,
      Sized a)
