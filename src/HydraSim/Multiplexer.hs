@@ -320,8 +320,8 @@ messageReceiver tracer mp = forever $ do
 peerChannel
   :: (MonadSTM m, MonadThrow m)
   => Multiplexer m a -> NodeId -> m (Channel m (MessageEdge a))
-peerChannel mp peer =
-  atomically (readTVar (mpChannels mp)) >>= \channels ->
+peerChannel mp peer = do
+  channels <- atomically (readTVar (mpChannels mp))
   case peer `Map.lookup` channels of
     Nothing -> throwM $ MissingChannel peer
     Just ch -> return ch
