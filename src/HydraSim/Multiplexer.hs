@@ -88,6 +88,7 @@ import           Control.Monad.Class.MonadSTM
 import           Control.Monad.Class.MonadThrow
 import           Control.Monad.Class.MonadTimer
 import           Control.Tracer
+import           Data.List (break)
 import           Data.Map (Map)
 import qualified Data.Map as Map
 import           Data.Time.Clock (DiffTime)
@@ -294,24 +295,33 @@ messageReceiver
   => Tracer m (TraceMultiplexer a)
   -> Multiplexer m a
   -> m ()
-messageReceiver tracer mp = forever $ do
-  chList <- Map.toList <$> (atomically . readTVar $ mpChannels mp)
-  (peer, msEdge) <- atomically $ pickNextMessage chList
-  case msEdge of
-    Leading bytes -> do
-      traceWith tracer $ MPRecvLeading peer bytes
-      threadDelay (mpReadCapacity mp $ bytes)
-      traceWith tracer MPRecvIdling
-    Trailing ms -> do
-      traceWith tracer $ MPRecvTrailing peer ms
-      atomically $ writeTBQueue (mpInQueue mp) (peer, ms)
+messageReceiver tracer mp = go Nothing
   where
-    -- TODO: There is a bias towards nodes early in the map, which we might want to remove.
+    go mlastPeer = do
+      (peer, msEdge) <- atomically $ do
+        -- We'll want to go round robin, to ensure fairness and avoid
+        -- starvation. We do this by remembering the last peer we got a message
+        -- from, and then cyclically permuting the list of connections, to try
+        -- the next node first.
+        chList <- Map.toAscList <$> (readTVar $ mpChannels mp)
+        let chList' = case mlastPeer of
+              Nothing -> chList
+              Just lastPeer -> let (pre, suf) = break ((> lastPeer) . fst) chList
+                               in suf ++ pre
+        pickNextMessage chList'
+      case msEdge of
+        Leading bytes -> do
+          traceWith tracer $ MPRecvLeading peer bytes
+          threadDelay (mpReadCapacity mp $ bytes)
+          traceWith tracer MPRecvIdling
+        Trailing ms -> do
+          traceWith tracer $ MPRecvTrailing peer ms
+          atomically $ writeTBQueue (mpInQueue mp) (peer, ms)
+      go (Just peer)
     pickNextMessage :: [(NodeId, Channel m (MessageEdge a))] -> STM m (NodeId, MessageEdge a)
-    pickNextMessage [] = retry
-    pickNextMessage ((peer, ch):chs) =
-      (recv ch >>= \ms -> return (peer, ms))
-        `orElse` pickNextMessage chs
+    pickNextMessage =
+      foldr (\(peer, ch) next -> (recv ch >>= \ms -> return (peer, ms)) `orElse` next)
+            retry
 
 -- | Get the channel to talk to a specified peer.
 --

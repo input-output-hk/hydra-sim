@@ -33,7 +33,7 @@ data Channel m a = Channel {
 mvarsAsChannel :: MonadSTM m
                => TMVar m a
                -> TMVar m a
-               -> Channel m a 
+               -> Channel m a
 mvarsAsChannel bufferRead bufferWrite =
     Channel{send, recv}
   where
