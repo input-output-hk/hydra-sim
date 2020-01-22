@@ -12,4 +12,5 @@ data TraceHydraEvent tx =
   | HydraProtocol (TraceProtocolEvent tx)
   | HydraDebug String
   | HydraMultiplexer (TraceMultiplexer (HeadProtocol tx))
-  deriving (Eq, Show)
+  | HydraState (HState tx)
+  deriving (Show)

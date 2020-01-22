@@ -66,7 +66,10 @@ twoNodesExample tracer = do
   node0 <- newNode (simpleNodeConf 2 0 10) (mBytePerSecond 10) (mBytePerSecond 10)
   node1 <- newNode (simpleNodeConf 2 1 10) (mBytePerSecond 10) (mBytePerSecond 10)
   connectNodes (delayedChannels prng) node0 node1
-  void $ concurrently (startNode tracer node0) (startNode tracer node1)
+  void $ async $ concurrently (startNode tracer node0) (startNode tracer node1)
+  threadDelay (millisecondsToDiffTime $ 1000 * 60 * 60) -- wait an hour
+  traceState tracer node0
+  traceState tracer node1
   where
     prng = mkStdGen 42
 
@@ -81,8 +84,12 @@ threeNodesExample tracer = do
   connectNodes (delayedChannels prng1) node0 node1
   connectNodes (delayedChannels prng2) node0 node2
   connectNodes (delayedChannels prng3) node1 node2
-  void $ concurrently (startNode tracer node0) $
+  void $ async $ concurrently (startNode tracer node0) $
     concurrently (startNode tracer node1) (startNode tracer node2)
+  threadDelay (millisecondsToDiffTime $ 1000 * 60 * 60) -- wait an hour
+  traceState tracer node0
+  traceState tracer node1
+  traceState tracer node2
   where
     prng = mkStdGen 42
     (prng1, prng') = split prng

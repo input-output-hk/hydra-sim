@@ -6,8 +6,8 @@ We model the timing of messages being sent between nodes in a network.
 
 The network itself is modelled by a delay in time between each message leaving
 the sending node and its arrival at the target node. The delay is determined by
-the distance between nodes, and is constant for any pair of nodes. In
-particular, it does not depend on the message size.
+the distance between nodes, plus a given random variance. In particular, it does
+not depend on the message size.
 
 Before being sent across the network, each message has to be serialised. So the
 event of a message being sent (or being received) by a node does not correspond

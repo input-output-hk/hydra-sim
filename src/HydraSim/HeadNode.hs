@@ -5,7 +5,8 @@ module HydraSim.HeadNode
   ( HeadNode,
     newNode,
     connectNodes,
-    startNode
+    startNode,
+    traceState
   ) where
 
 import           Control.Monad (forever, void)
@@ -97,6 +98,14 @@ startNode tracer hn = void $
   concurrently (txSender tracer hn) (snDaemon tracer hn)
   where
     mpTracer = contramap HydraMessage tracer
+
+-- | write the current state to the trace
+traceState
+  :: (MonadSTM m, Tx tx)
+  => Tracer m (TraceHydraEvent tx) -> HeadNode m tx -> m ()
+traceState tracer hn = do
+  s <- atomically $ readTMVar (hnState hn)
+  traceWith tracer $ HydraState s
 
 -- | Add a message from the client (as opposed to from a node) to the message queue.
 --
