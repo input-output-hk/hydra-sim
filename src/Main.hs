@@ -8,6 +8,7 @@ import Control.Monad.Class.MonadSTM
 import Control.Monad.Class.MonadSay
 import Control.Monad.Class.MonadTime
 import Control.Monad.Class.MonadTimer
+import Control.Monad.Class.MonadThrow
 import Control.Monad.IOSim
 import Control.Tracer
 import Data.Dynamic
@@ -16,6 +17,7 @@ import HydraSim.Channel
 import HydraSim.HeadNode
 import HydraSim.MSig.Mock
 import HydraSim.Sized
+import HydraSim.Trace
 import HydraSim.Tx.Mock
 import HydraSim.Types
 import System.Random (RandomGen, mkStdGen, split)
@@ -56,24 +58,26 @@ main = do
   mapM_ print $ selectTraceHydraEvents DontShowDebugMessages trace
 
 
-twoNodesExample :: (MonadTime m, MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
+twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m,
+                   MonadThrow m, MonadTime m)
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 twoNodesExample tracer = do
-  node0 <- newNode $ simpleNodeConf 2 0 10
-  node1 <- newNode $ simpleNodeConf 2 1 10
+  node0 <- newNode (simpleNodeConf 2 0 10) (mBytePerSecond 10) (mBytePerSecond 10)
+  node1 <- newNode (simpleNodeConf 2 1 10) (mBytePerSecond 10) (mBytePerSecond 10)
   connectNodes (delayedChannels prng) node0 node1
   void $ concurrently (startNode tracer node0) (startNode tracer node1)
   where
     prng = mkStdGen 42
 
-threeNodesExample :: (MonadTime m, MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m)
+threeNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m,
+                     MonadThrow m, MonadTime m)
   => Tracer m (TraceHydraEvent MockTx)
   -> m ()
 threeNodesExample tracer = do
-  node0 <- newNode $ simpleNodeConf 3 0 100
-  node1 <- newNode $ simpleNodeConf 3 1 100
-  node2 <- newNode $ simpleNodeConf 3 2 100
+  node0 <- newNode (simpleNodeConf 3 0 100) (mBytePerSecond 10) (mBytePerSecond 10)
+  node1 <- newNode (simpleNodeConf 3 1 100) (mBytePerSecond 10) (mBytePerSecond 10)
+  node2 <- newNode (simpleNodeConf 3 2 100) (mBytePerSecond 10) (mBytePerSecond 10)
   connectNodes (delayedChannels prng1) node0 node1
   connectNodes (delayedChannels prng2) node0 node2
   connectNodes (delayedChannels prng3) node1 node2
@@ -85,13 +89,14 @@ threeNodesExample tracer = do
     (prng2, prng3) = split prng'
 
 delayedChannels
-  :: (MonadSTM m, MonadTime m, MonadTimer m, RandomGen prng,
-     Sized a)
+  :: (MonadAsync m, MonadSTM m, MonadTimer m, MonadTime m,
+      RandomGen prng, Show a)
   => prng -> m (Channel m a, Channel m a)
-delayedChannels =
-  createConnectedDelayChannels (1024*1024)
-  -- TODO: get realistic GSV numbers
-  (millisecondsToDiffTime 10, millisecondsToDiffTime 5, millisecondsToDiffTime 1)
+delayedChannels prng =
+  createConnectedDelayChannels
+  -- TODO: get realistic GV numbers
+  (millisecondsToDiffTime 10, millisecondsToDiffTime 5)
+  prng
 
 simpleMsig :: MS MockTx
 simpleMsig = MS {
@@ -131,3 +136,11 @@ simpleNodeConf n i ntx
 
 millisecondsToDiffTime :: Integer -> DiffTime
 millisecondsToDiffTime = picosecondsToDiffTime . (* 1000000000)
+
+-- | Data rate of 'n' megabytes per second
+mBytePerSecond
+  :: Integer
+  -- ^ @n@
+  -> Size -> DiffTime
+mBytePerSecond rate (Size b) = picosecondsToDiffTime $
+  (fromIntegral b) * 1000 * 1000 * 1000 * 1000 `div` (1024 * 1024 * rate)

@@ -2,79 +2,101 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE BangPatterns #-}
 module HydraSim.HeadNode
-  ( newNode,
+  ( HeadNode,
+    newNode,
     connectNodes,
     startNode
   ) where
 
-import           Control.Monad (forever, forM_, void)
+import           Control.Monad (forever, void)
 import           Control.Monad.Class.MonadAsync
 import           Control.Monad.Class.MonadSTM
+import           Control.Monad.Class.MonadThrow
 import           Control.Monad.Class.MonadTimer
 import           Control.Tracer
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
+import           Data.Time.Clock (DiffTime)
 import           HydraSim.Channel
 import           HydraSim.DelayedComp
 import           HydraSim.HeadNode.Handler (handleMessage)
 import           HydraSim.MSig.Mock
+import           HydraSim.Multiplexer
+import           HydraSim.Sized
+import           HydraSim.Trace
 import           HydraSim.Tx.Class
 import           HydraSim.Types
 
-newNode :: (MonadSTM m, Tx tx) =>
-  NodeConf tx -> m (HeadNode m tx)
-newNode conf = do
+-- | A node in the head protocol.
+data Tx tx => HeadNode m tx = HeadNode {
+  -- | Static configuration
+  hnConf :: NodeConf tx,
+  -- | Current local state
+  hnState :: TMVar m (HState tx),
+  -- | A 'Multiplexer' to handle communication with other nodes.
+  hnMultiplexer :: Multiplexer m (HeadProtocol tx)
+  }
+
+-- | Set up a new node to participate in the head protocol.
+newNode
+  :: (MonadSTM m, Tx tx)
+  => NodeConf tx
+  -> (Size -> DiffTime)
+  -- ^ Write capacity of the node's network device.
+  --
+  -- Determines how much time it takes to serialise and send a message of a
+  -- given size.
+  -> (Size -> DiffTime)
+  -- ^ Read capacity of the node's network device.
+  -> m (HeadNode m tx)
+newNode conf writeCapacity readCapacity = do
   state <- newTMVarM $ hStateEmpty (hcNodeId conf)
-  inbox <- atomically $ newTBQueue 100 -- TODO: make this configurable
-  handlers <- newTVarM Map.empty
+  multiplexer <- newMultiplexer 100 100 -- TODO: make this configurable
+                 writeCapacity readCapacity
   return $ HeadNode {
     hnConf = conf,
     hnState = state,
-    hnInbox = inbox,
-    hnPeerHandlers = handlers
+    hnMultiplexer = multiplexer
     }
 
+-- | Connect two nodes.
 connectNodes
-  :: (MonadAsync m, Tx tx)
-  => m (Channel m (HeadProtocol tx), Channel m (HeadProtocol tx))
+  :: forall m tx . (MonadAsync m, MonadTimer m,
+      Tx tx)
+  => m (Channel m (MessageEdge (HeadProtocol tx)),
+        Channel m (MessageEdge (HeadProtocol tx)))
   -> HeadNode m tx
   -> HeadNode m tx
   -> m ()
 connectNodes createChannels node node' = do
-  (ch, ch') <- createChannels
-  addPeer node (hcNodeId $ hnConf node') ch
-  addPeer node' (hcNodeId $ hnConf node) ch'
+  connect createChannels
+    (hcNodeId (hnConf node), hnMultiplexer node)
+    (hcNodeId (hnConf node'), hnMultiplexer node')
+  addPeer node (hcNodeId $ hnConf node')
+  addPeer node' (hcNodeId $ hnConf node)
+  where
+    addPeer :: HeadNode m tx -> NodeId -> m ()
+    addPeer hn (NodeId i) = atomically $ do
+      state <- takeTMVar (hnState hn)
+      putTMVar (hnState hn) $!
+        state { hsVKs = Set.insert (VKey i) $ hsVKs state }
 
+-- | Start a node.
+--
+-- This starts the multiplexer, the event loop handling messages, and threads
+-- for sending transactions and making snapshots, according to the strategies
+-- specified in the node config.
 startNode
-  :: (MonadSTM m, MonadTimer m, MonadAsync m,
+  :: (MonadSTM m, MonadTimer m, MonadAsync m, MonadThrow m,
        Tx tx)
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 startNode tracer hn = void $
   concurrently (listener tracer hn) $
+  concurrently (startMultiplexer mpTracer (hnMultiplexer hn)) $
   concurrently (txSender tracer hn) (snDaemon tracer hn)
-
--- | Add a peer, and install a thread that will collect messages from the
--- channel to the main inbox of the node.
-addPeer
-  :: (MonadSTM m, MonadAsync m,
-           Tx tx)
-  => HeadNode m tx -> NodeId -> Channel m (HeadProtocol tx) -> m ()
-addPeer hn peerId@(NodeId i) peerChannel = do
-  peerHandler <- async protocolHandler
-  atomically $ do
-    state <- takeTMVar (hnState hn)
-    putTMVar (hnState hn) $!
-      state { hsVKs = Set.insert (VKey i) $ hsVKs state
-            , hsChannels = Map.insert peerId peerChannel $ hsChannels state
-            }
-    modifyTVar (hnPeerHandlers hn) $ Map.insert peerId peerHandler
   where
-    protocolHandler = forever $ do
-      recv peerChannel >>= \case
-        Nothing -> return ()
-        Just message -> do
-          atomically $ writeTBQueue (hnInbox hn) (peerId, message)
+    mpTracer = contramap HydraMessage tracer
 
 -- | Add a message from the client (as opposed to from a node) to the message queue.
 --
@@ -83,14 +105,13 @@ addPeer hn peerId@(NodeId i) peerChannel = do
 clientMessage
   :: (MonadSTM m, Tx tx)
   => Tracer m (TraceHydraEvent tx)
-  -> HeadNode m  tx
+  -> HeadNode m tx
   -> HeadProtocol tx
   -> m ()
-clientMessage tracer hn message = do
-  traceWith messageTracer $ TraceMessageClient message
-  atomically $ writeTBQueue (hnInbox hn) (hcNodeId (hnConf hn), message)
+clientMessage tracer hn message =
+  sendToSelf mpTracer (hnMultiplexer hn) (hcNodeId (hnConf hn)) message
   where
-    messageTracer = contramap HydraMessage tracer
+    mpTracer = contramap HydraMessage tracer
 
 -- | This is for the actual logic of the node, processing incoming messages.
 listener
@@ -100,12 +121,12 @@ listener
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 listener tracer hn = forever $ do
-  atomically (readTBQueue $ hnInbox hn) >>= \(peer, ms) -> do
-    traceWith messageTracer (TraceMessageReceived peer ms)
+  atomically (getMessage mplex) >>= \(peer, ms) ->
     applyMessage peer ms
 
   where
-    messageTracer = contramap HydraMessage tracer
+    mplex = hnMultiplexer hn
+    mpTracer = contramap HydraMessage tracer
     protocolTracer = contramap HydraProtocol tracer
     hydraDebugTracer = contramap HydraDebug tracer
     thisId = hcNodeId (hnConf hn)
@@ -130,10 +151,8 @@ listener tracer hn = forever $ do
           runComp ms' >>= sendMessage
         DecWait comp -> do
           runComp comp
-          atomically $ do
-            writeTBQueue (hnInbox hn) (peer, ms)
-            putTMVar (hnState hn) state
-          traceWith messageTracer (TraceMessageRequeued ms)
+          atomically $ putTMVar (hnState hn) state
+          reenqueue mpTracer mplex (peer, ms)
         DecInvalid comp errmsg -> do
           runComp comp
           traceWith protocolTracer (TPInvalidTransition errmsg)
@@ -141,31 +160,12 @@ listener tracer hn = forever $ do
     sendMessage :: SendMessage tx -> m ()
     sendMessage SendNothing = return ()
     sendMessage (SendTo peer ms)
-      -- messges to the same node are just added to the inbox directly
-      | peer == thisId = do
-          traceWith messageTracer (TraceMessageSent peer ms)
-          atomically $ writeTBQueue (hnInbox hn) (peer, ms)
-      | otherwise = do
-          s <- atomically $ readTMVar (hnState hn)
-          case (Map.lookup peer) . hsChannels $ s of
-            Just ch -> do
-              traceWith messageTracer (TraceMessageSent peer ms)
-              send ch ms
-            Nothing ->
-              error $ concat ["Error in ", show thisId
-                             , ": Did not find peer ", show peer
-                             , " in ", show . Map.keys . hsChannels $ s]
-    sendMessage (Multicast ms) = do
-      traceWith messageTracer (TraceMessageMulticast ms)
-      s <- atomically $ readTMVar (hnState hn)
-      forM_ (Map.toList $ hsChannels s) $ \(_nodeId, ch) ->
-        send ch ms
-      -- as described in the paper, multicasting a message always is followed by
-      -- the sending node itself acting on the message, as if it had been
-      -- received by another node:
-      applyMessage thisId ms
-
-
+      -- messages to the same node are just added to the inbox directly, without
+      -- going over the network
+      | peer == thisId = sendToSelf mpTracer mplex thisId ms
+      | otherwise = sendTo mplex peer ms
+    sendMessage (Multicast ms) =
+      multicast mpTracer mplex thisId ms
 
 txSender
   :: (MonadAsync m, MonadSTM m,
