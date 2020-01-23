@@ -1,3 +1,4 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 
 import Control.Exception (throw)
@@ -33,16 +34,16 @@ data ShowDebugMessages =
 selectTraceHydraEvents
   :: ShowDebugMessages
   -> Trace a
-  -> [(Time, ThreadId (SimM s), TraceHydraEvent MockTx)]
+  -> [(Time, Maybe ThreadLabel, ThreadId (SimM s), TraceHydraEvent MockTx)]
 selectTraceHydraEvents showDebugMessages = go
   where
-    go (Trace t tid _ (EventLog e) trace)
-     | Just x <- fromDynamic e    =
+    go (Trace t tid tlab (EventLog e) trace)
+     | Just (x :: TraceHydraEvent MockTx) <- fromDynamic e    =
          case x of
            HydraDebug _ -> if showDebugMessages == ShowDebugMessages
-                           then (t,tid,x) : go trace
+                           then (t,tlab,tid,x) : go trace
                            else             go trace
-           _ ->                 (t,tid,x) : go trace
+           _ ->                 (t,tlab,tid,x) : go trace
     go (Trace _ _ _ _ trace)      =         go trace
     go (TraceMainException _ e _) = throw e
     go (TraceDeadlock      _   _) = [] -- expected result in many cases

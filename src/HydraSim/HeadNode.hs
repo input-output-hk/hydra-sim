@@ -11,6 +11,7 @@ module HydraSim.HeadNode
 
 import           Control.Monad (forever, void)
 import           Control.Monad.Class.MonadAsync
+import           Control.Monad.Class.MonadFork (myThreadId, labelThread)
 import           Control.Monad.Class.MonadSTM
 import           Control.Monad.Class.MonadThrow
 import           Control.Monad.Class.MonadTimer
@@ -52,7 +53,9 @@ newNode
   -> m (HeadNode m tx)
 newNode conf writeCapacity readCapacity = do
   state <- newTMVarM $ hStateEmpty (hcNodeId conf)
-  multiplexer <- newMultiplexer 100 100 -- TODO: make this configurable
+  multiplexer <- newMultiplexer
+                 (show . hcNodeId $ conf)
+                 100 100 -- TODO: make this configurable
                  writeCapacity readCapacity
   return $ HeadNode {
     hnConf = conf,
@@ -93,11 +96,16 @@ startNode
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 startNode tracer hn = void $
-  concurrently (listener tracer hn) $
+  concurrently (labelThisThread >> listener tracer hn) $
   concurrently (startMultiplexer mpTracer (hnMultiplexer hn)) $
-  concurrently (txSender tracer hn) (snDaemon tracer hn)
+  concurrently (labelThisThread >> txSender tracer hn)
+               (labelThisThread >> snDaemon tracer hn)
   where
     mpTracer = contramap HydraMessage tracer
+    nodeLabel = (show . hcNodeId . hnConf $ hn)
+    labelThisThread = do
+      myId <- myThreadId
+      labelThread myId nodeLabel
 
 -- | write the current state to the trace
 traceState

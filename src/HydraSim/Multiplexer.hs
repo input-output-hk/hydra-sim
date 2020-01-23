@@ -84,6 +84,7 @@ where
 
 import           Control.Monad (forever, void, forM_)
 import           Control.Monad.Class.MonadAsync
+import           Control.Monad.Class.MonadFork (MonadThread, myThreadId, labelThread)
 import           Control.Monad.Class.MonadSTM
 import           Control.Monad.Class.MonadThrow
 import           Control.Monad.Class.MonadTimer
@@ -124,13 +125,16 @@ data Multiplexer m a = Multiplexer {
   -- given size.
   mpWriteCapacity :: Size -> DiffTime,
   -- | Read capacity
-  mpReadCapacity :: Size -> DiffTime
+  mpReadCapacity :: Size -> DiffTime,
+  -- | Threads from this @Multiplexer@ will have this label
+  mpThreadLabel :: String
   }
 
 -- | Create a new 'Multiplexer'.
 newMultiplexer
   :: MonadSTM m
-  => Natural -- ^ Buffer size for outbound message queue
+  => String -- ^ Threads from this @Multiplexer@ will have this label
+  -> Natural -- ^ Buffer size for outbound message queue
   -> Natural -- ^ Buffer size for incoming message queue
   -> (Size -> DiffTime)
   -- ^ Write capacity
@@ -139,7 +143,7 @@ newMultiplexer
   -- given size.
   -> (Size -> DiffTime) -- ^ Read capacity.
   -> m (Multiplexer m a)
-newMultiplexer outBufferSize inBufferSize writeCapacity readCapacity = do
+newMultiplexer label outBufferSize inBufferSize writeCapacity readCapacity = do
   outQueue <- atomically $ newTBQueue outBufferSize
   inQueue <- atomically $ newTBQueue inBufferSize
   channels <- atomically $ newTVar (Map.empty)
@@ -148,7 +152,8 @@ newMultiplexer outBufferSize inBufferSize writeCapacity readCapacity = do
     mpInQueue = inQueue,
     mpChannels = channels,
     mpWriteCapacity = writeCapacity,
-    mpReadCapacity = readCapacity
+    mpReadCapacity = readCapacity,
+    mpThreadLabel = label
     }
 
 -- | Connect two nodes.
@@ -182,7 +187,14 @@ startMultiplexer
   -> Multiplexer m a
   -> m ()
 startMultiplexer tracer mp = void $
-  concurrently (messageSender tracer mp) (messageReceiver tracer mp)
+  concurrently (labelThisThread mp >> messageSender tracer mp)
+               (labelThisThread mp >> messageReceiver tracer mp)
+  where
+
+labelThisThread :: MonadThread m => Multiplexer m a -> m ()
+labelThisThread mp = do
+  myId <- myThreadId
+  labelThread myId (mpThreadLabel mp)
 
 -- | Place a message in the outgoing queue, so that it will be sent by
 -- 'messageSender' once the network interface has capacity.
@@ -239,6 +251,7 @@ reenqueue
   -> (NodeId, a)
   -> m ()
 reenqueue tracer mp (peer, ms) = void $ async $ do
+  labelThisThread mp
   atomically $ (isEmptyTBQueue (mpInQueue mp)) >>= \case
     True -> retry -- Do not put it back in the queue if the queue is empty,
                   -- otherwise we'll just loop forever!
