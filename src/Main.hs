@@ -1,7 +1,5 @@
-{-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 
-import Control.Exception (throw)
 import Control.Monad (void)
 import Control.Monad.Class.MonadAsync
 import Control.Monad.Class.MonadFork
@@ -10,9 +8,7 @@ import Control.Monad.Class.MonadSay
 import Control.Monad.Class.MonadTime
 import Control.Monad.Class.MonadTimer
 import Control.Monad.Class.MonadThrow
-import Control.Monad.IOSim
 import Control.Tracer
-import Data.Dynamic
 import Data.Time.Clock (picosecondsToDiffTime)
 import HydraSim.Channel
 import HydraSim.HeadNode
@@ -22,42 +18,12 @@ import HydraSim.Trace
 import HydraSim.Tx.Mock
 import HydraSim.Types
 import System.Random (RandomGen, mkStdGen, split)
-
-dynamicTracer :: Typeable a => Tracer (SimM s) a
-dynamicTracer = Tracer traceM
-
-data ShowDebugMessages =
-    ShowDebugMessages
-  | DontShowDebugMessages
-  deriving Eq
-
-selectTraceHydraEvents
-  :: ShowDebugMessages
-  -> Trace a
-  -> [(Time, Maybe ThreadLabel, ThreadId (SimM s), TraceHydraEvent MockTx)]
-selectTraceHydraEvents showDebugMessages = go
-  where
-    go (Trace t tid tlab (EventLog e) trace)
-     | Just (x :: TraceHydraEvent MockTx) <- fromDynamic e    =
-         case x of
-           HydraDebug _ -> if showDebugMessages == ShowDebugMessages
-                           then (t,tlab,tid,x) : go trace
-                           else             go trace
-           _ ->                 (t,tlab,tid,x) : go trace
-    go (Trace _ _ _ _ trace)      =         go trace
-    go (TraceMainException _ e _) = throw e
-    go (TraceDeadlock      _   _) = [] -- expected result in many cases
-    go (TraceMainReturn    _ _ _) = []
+import HydraSim.Analyse
 
 main :: IO ()
 main = do
-  let tracer = dynamicTracer
-  let trace = runSimTrace (twoNodesExample tracer)
-  -- putStrLn "full trace: "
-  -- print trace
-  putStrLn "trace of TraceProtocolEvent:"
-  mapM_ print $ selectTraceHydraEvents DontShowDebugMessages trace
-
+  analyseRun twoNodesExample
+  analyseRun threeNodesExample
 
 twoNodesExample :: (MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m,
                    MonadThrow m, MonadTime m)

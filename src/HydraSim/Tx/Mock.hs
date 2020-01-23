@@ -38,3 +38,6 @@ instance Sized (TxRef MockTx) where
   size _ = 20
 instance Sized MockTx where
   size = mtxSize
+
+instance Eq MockTx where
+  tx == tx' = txRef tx == txRef tx'

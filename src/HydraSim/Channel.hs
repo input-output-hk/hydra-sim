@@ -15,7 +15,6 @@ import Control.Monad.Class.MonadAsync
 import Control.Monad.Class.MonadSTM
 import Control.Monad.Class.MonadTime
 import Control.Monad.Class.MonadTimer
-import Control.Tracer
 import Data.Time.Clock (DiffTime,
                         diffTimeToPicoseconds,
                         picosecondsToDiffTime)

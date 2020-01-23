@@ -139,7 +139,7 @@ data Tx tx => HState tx = HState {
   -- | Set of "in flight" transactions (transactions we have sent that are not
   -- yet confirmed).
   hsTxsInflight :: !(Set (TxRef tx))
-  }
+  } deriving Eq
 -- We'll want to show a node's state for debugging, but we want a custom
 -- instance, suppressing showing the channels (which don't have a Show
 -- instance), and the actual transactions (which would be too vebose -- but we
