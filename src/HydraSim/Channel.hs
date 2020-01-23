@@ -10,7 +10,7 @@ module HydraSim.Channel
     createConnectedDelayChannels
   ) where
 
-import Control.Monad (forever, void)
+import Control.Monad (when, forever, void)
 import Control.Monad.Class.MonadAsync
 import Control.Monad.Class.MonadSTM
 import Control.Monad.Class.MonadTime
@@ -162,7 +162,5 @@ createConnectedDelayChannels (g, v) prng0 = do
           (arrive, x) <- atomically $ readTQueue prebuffer
           now <- getMonotonicTime
           let delay = arrive `diffTime` now
-          if delay > 0
-            then threadDelay delay
-            else traceWith debugTracer $ "Enforcing message order, delay " ++ show delay ++ ", message " ++ show x
+          when (delay > 0) (threadDelay delay)
           atomically $ writeTQueue buffer x
