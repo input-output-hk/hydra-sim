@@ -19,15 +19,17 @@ import Control.Tracer
 import HydraSim.HeadNode
 import HydraSim.Trace
 
-data Txs = SendPlutus Int Int
-         | SendSimple Int Int
-         deriving Show
+data Txs = Plutus
+         | Simple
+         deriving (Show, Read)
 
 data NodeSpec = NodeSpec {
   nodeRegion :: AWSCenters,
   -- | in- and outbound network capacity of this node, in kbits/s
   nodeNetworkCapacity :: Integer,
-  nodeTxs :: Txs
+  nodeTxs :: Txs,
+  nodeTxNumber :: Int,
+  nodeTxConcurrency :: Int
   } deriving Show
 
 runNodes
@@ -43,17 +45,17 @@ runNodes nodeSpecs tracer = do
   threadDelay $ 3.14e7
   where
   nNodes = length nodeSpecs
-  sendStrategy i (SendPlutus maxInflight ntx) =
-    SendTxs maxInflight $
-    [plutusTx (TxId $ nNodes * j + i) | j <- [0..ntx-1]]
-  sendStrategy i (SendSimple maxInflight ntx) =
-    SendTxs maxInflight $
-    [cardanoTx (TxId $ nNodes * j + i) 2 | j <- [0..ntx-1]]
+  sendStrategy i nspec =
+    let txFun = (case nodeTxs nspec of
+                   Plutus -> plutusTx
+                   Simple -> flip cardanoTx 2)
+    in SendTxs (nodeTxConcurrency nspec) $
+       [ txFun (TxId $ nNodes * j + i) | j <- [0..(nodeTxNumber nspec)-1]]
   createNode i nspec = do
     let 
         nodeConf = NodeConf {
           hcNodeId = NodeId i,
-          hcTxSendStrategy = sendStrategy i (nodeTxs nspec),
+          hcTxSendStrategy = sendStrategy i nspec,
           hcMSig = simpleMsig,
           hcLeaderFun = \(SnapN s) -> NodeId (s `mod` nNodes),
           hcSnapshotStrategy = SnapAfterNTxs 1

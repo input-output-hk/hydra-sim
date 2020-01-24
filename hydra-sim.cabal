@@ -38,12 +38,13 @@ executable hydra-sim
                      , HydraSim.Types
   -- other-extensions:
   build-depends:       base >=4.12 && <4.13
+                     , containers >= 0.6.0.1
                      , contra-tracer
                      , io-sim
                      , io-sim-classes
+                     , optparse-applicative
                      , random
                      , time >= 1.8.0.2
-                     , containers >= 0.6.0.1
   -- hs-source-dirs:
   default-language:    Haskell2010
   ghc-options:         -Wall

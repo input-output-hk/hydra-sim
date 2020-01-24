@@ -23,7 +23,7 @@ data AWSCenters = NVirginiaAWS
   | MumbaiAWS
   | SaoPauloAWS
   | GL10
-  deriving (Eq, Ord, Bounded, Enum, Show)
+  deriving (Eq, Ord, Bounded, Enum, Show, Read)
 
 -- | Create a delayed channel, with an @S@ taken from measurements between data
 -- centers across the world.
@@ -141,4 +141,7 @@ getS SydneyAWS MumbaiAWS = Just 0.111
 getS SydneyAWS SaoPauloAWS = Just 0.16
 
 getS MumbaiAWS SaoPauloAWS = Just 0.153
+
+getS x y
+  | x == y = Just 0.005
 getS _ _ = Nothing
