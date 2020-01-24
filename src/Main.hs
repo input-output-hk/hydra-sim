@@ -1,18 +1,23 @@
 module Main where
 
+import Control.Monad (when, forM_)
+import Data.List (intercalate)
+import Data.Semigroup ((<>))
 import HydraSim.Analyse
 import HydraSim.Examples.Channels
 import HydraSim.Examples.Nodes
-
 import Options.Applicative
-import Data.Semigroup ((<>))
+import System.Directory (doesFileExist)
+import System.IO
 
 data CLI = CLI {
   regions :: [AWSCenters],
   networkCapacity :: Integer,
   txType :: Txs,
   concurrency :: Int,
-  numberTxs :: Int
+  numberTxs :: Int,
+  output :: FilePath,
+  quiet :: Bool
   }
 
 cli :: Parser CLI
@@ -30,6 +35,11 @@ cli = CLI
                     <> help "Determines how many transaction any node will send before older transactions are confirmed."))
   <*> (option auto (short 'n'
                     <> help "Number of transactions each node will send."))
+  <*> (strOption (short 'o'
+                    <> long "output"
+                    <> help "Write output to CSV file"
+                    <> value "out.csv" ))
+  <*> switch ( long "quiet" <> short 'q' <> help "Whether to be quiet" )
 
 main :: IO ()
 main = do
@@ -44,4 +54,17 @@ main = do
                   nodeTxConcurrency = concurrency opts,
                   nodeTxNumber = numberTxs opts
                  }
-  analyseRun (runNodes specs)
+  (txs, snaps) <- analyseRun (quiet opts) (runNodes specs)
+  let fp = output opts
+  doesExist <- doesFileExist fp
+  let mode = if doesExist then AppendMode else WriteMode
+  withFile fp mode $ \h -> do
+        when (not doesExist) (hPutStrLn h "t,object,conftime,bandwidth,txtype,conc")
+        forM_ txs $ \tx -> case tx of
+          TxConfirmed t dt -> hPutStrLn h $ intercalate ","
+            [show t, "tx", show dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts]
+          TxUnconfirmed _ -> return ()
+        forM_ snaps $ \snap -> case snap of
+          SnConfirmed _size t dt -> hPutStrLn h $ intercalate ","
+            [show t, "snap", show dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts]
+          SnUnconfirmed _ _ -> return ()

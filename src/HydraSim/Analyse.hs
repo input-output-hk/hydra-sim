@@ -14,6 +14,7 @@ module HydraSim.Analyse
 where
 
 import           Control.Exception (throw)
+import           Control.Monad (when)
 import           Control.Monad.Class.MonadFork
 import           Control.Monad.Class.MonadTime
 import           Control.Monad.IOSim
@@ -68,18 +69,20 @@ dynamicTracer :: Typeable a => Tracer (SimM s) a
 dynamicTracer = Tracer traceM
 
 analyseRun :: Typeable a
-  => (forall s. Tracer (SimM s) a -> SimM s ()) -> IO ()
-analyseRun run = do
+  => Bool -- ^ quiet mode
+  -> (forall s. Tracer (SimM s) a -> SimM s ()) -> IO ([TxConfirmed], [SnConfirmed])
+analyseRun quiet run = do
   let fullTrace = runSimTrace (run dynamicTracer)
       trace = selectTraceHydraEvents DontShowDebugMessages fullTrace
       confTxs = confirmedTxs trace
       confSnaps = confirmedSnapshots trace
   -- putStrLn "trace of TraceProtocolEvent:"
   -- mapM_ print trace
-  putStrLn "transaction confirmation times:"
-  mapM_ print confTxs
-  putStrLn "snapshot confirmation times:"
-  mapM_ print confSnaps
+  when (not quiet) $ do
+    putStrLn "transaction confirmation times:"
+    mapM_ print confTxs
+    putStrLn "snapshot confirmation times:"
+    mapM_ print confSnaps
   let totalTxs = length confTxs
       txsInSnaps = sum $ txsInConfSnap <$> confSnaps
   if (totalTxs == txsInSnaps)
@@ -98,6 +101,7 @@ analyseRun run = do
                                             SnUnconfirmed _ _ -> True
                                         ) confSnaps)),
       "unconfirmed snapshots."]
+  return (confTxs, confSnaps)
 
 nodesInTrace :: [HTrace s] -> Set ThreadLabel
 nodesInTrace = (Set.delete "main") . Set.fromList . map hNode
