@@ -219,7 +219,8 @@ instance Tx tx => Sized (HeadProtocol tx) where
   size (SigAckSn snapN sig) = messageHeaderSize + size snapN + size sig
   size (SigConfSn snapN asig) = messageHeaderSize + size snapN + size asig
 messageHeaderSize :: Size
-messageHeaderSize = 16 -- TODO: is this a realistic overhead?
+messageHeaderSize = 2 -- Given that we only have a handful of different message
+                      -- in the protocol, this should be plenty.
 
 -- | Decision of the node what to do in response to an event.
 data Decision tx =

@@ -35,7 +35,7 @@ instance Tx MockTx where
   txSort = id -- We do not have inputs/outputs, so any order is fine.
 
 instance Sized (TxRef MockTx) where
-  size _ = 20
+  size _ = 32 -- txs are referenced by their 32 byte hashes
 instance Sized MockTx where
   size = mtxSize
 

@@ -31,13 +31,13 @@ newtype VKey = VKey Int deriving (Eq, Ord, Show)
 newtype SKey = SKey Int deriving (Eq, Ord, Show)
 newtype Sig = Sig Int deriving (Eq, Ord, Show)
 instance Sized Sig where
-  size _ = 66 -- TODO double-check signature size
+  size _ = 66
 
 newtype AVKey = AVKey (Set VKey) deriving (Eq, Ord, Show)
 newtype ASKey = ASKey (Set SKey) deriving (Eq, Ord, Show)
 newtype ASig = ASig (Set Sig) deriving (Eq, Ord, Show)
 instance Sized ASig where
-  size _ = 66 -- TODO double-check signature size
+  size _ = 66
 
 
 ms_avk :: Set VKey -> AVKey
