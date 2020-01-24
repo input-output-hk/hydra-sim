@@ -1,8 +1,10 @@
 module Main where
 
 import Control.Monad (when, forM_)
+import Control.Monad.Class.MonadTime
 import Data.List (intercalate)
 import Data.Semigroup ((<>))
+import Data.Time.Clock (diffTimeToPicoseconds)
 import HydraSim.Analyse
 import HydraSim.Examples.Channels
 import HydraSim.Examples.Nodes
@@ -59,12 +61,19 @@ main = do
   doesExist <- doesFileExist fp
   let mode = if doesExist then AppendMode else WriteMode
   withFile fp mode $ \h -> do
-        when (not doesExist) (hPutStrLn h "t,object,conftime,bandwidth,txtype,conc")
+        when (not doesExist) (hPutStrLn h "t,object,conftime,bandwidth,txtype,conc,regions")
         forM_ txs $ \tx -> case tx of
           TxConfirmed t dt -> hPutStrLn h $ intercalate ","
-            [show t, "tx", show dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts]
+            [showt (timeToDiffTime t), "tx", showt dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts]
           TxUnconfirmed _ -> return ()
         forM_ snaps $ \snap -> case snap of
           SnConfirmed _size t dt -> hPutStrLn h $ intercalate ","
-            [show t, "snap", show dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts]
+            [showt (timeToDiffTime t), "snap", showt dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts]
           SnUnconfirmed _ _ -> return ()
+
+showt :: DiffTime -> String
+showt x = show (1e-12 * fromInteger (diffTimeToPicoseconds x) :: Double)
+timeToDiffTime :: Time -> DiffTime
+timeToDiffTime t = t `diffTime` Time 0
+showCenterList :: [AWSCenters] -> String
+showCenterList centers = intercalate "-" $ map show centers

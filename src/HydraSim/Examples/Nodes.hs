@@ -67,8 +67,7 @@ runNodes nodeSpecs tracer = do
   connectAllNodes (node:nodes) = do
     mapM_ (connect node) nodes
     connectAllNodes nodes
-  connect (nspec, node) (nspec', node') = do
-    traceWith debugTracer $ "Connecting" ++ show nspec ++ " and " ++ show nspec'
+  connect (nspec, node) (nspec', node') =
     connectNodes (channel (nodeRegion nspec) (nodeRegion nspec')) node node'
 
 kBitsPerSecond :: Integer -> (Size -> DiffTime)
