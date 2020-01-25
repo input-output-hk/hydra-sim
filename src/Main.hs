@@ -4,7 +4,6 @@ import Control.Monad (when, forM_)
 import Control.Monad.Class.MonadTime
 import Data.List (intercalate)
 import Data.Semigroup ((<>))
-import Data.Time.Clock (diffTimeToPicoseconds)
 import HydraSim.Analyse
 import HydraSim.Examples.Channels
 import HydraSim.Examples.Nodes
@@ -18,7 +17,8 @@ data CLI = CLI {
   txType :: Txs,
   concurrency :: Int,
   numberTxs :: Int,
-  output :: FilePath,
+  fileConfTime :: FilePath,
+  fileTPS :: FilePath,
   quiet :: Bool
   }
 
@@ -39,8 +39,12 @@ cli = CLI
                     <> help "Number of transactions each node will send."))
   <*> (strOption (short 'o'
                     <> long "output"
-                    <> help "Write output to CSV file"
-                    <> value "out.csv" ))
+                    <> help "Write confirmation times to this CSV file"
+                    <> value "conftime.csv" ))
+  <*> (strOption (short 'r'
+                    <> long "rate-output"
+                    <> help "Write transaction throughput (tps) to this CSV file"
+                    <> value "tps.csv" ))
   <*> switch ( long "quiet" <> short 'q' <> help "Whether to be quiet" )
 
 main :: IO ()
@@ -57,23 +61,41 @@ main = do
                   nodeTxNumber = numberTxs opts
                  }
   (txs, snaps) <- analyseRun (quiet opts) (runNodes specs)
-  let fp = output opts
+  writeConfTimes opts txs snaps
+  writeTPS opts txs
+
+writeConfTimes :: CLI -> [TxConfirmed] -> [SnConfirmed] -> IO ()
+writeConfTimes opts txs snaps = do
+  let fp = fileConfTime opts
   doesExist <- doesFileExist fp
   let mode = if doesExist then AppendMode else WriteMode
   withFile fp mode $ \h -> do
-        when (not doesExist) (hPutStrLn h "t,object,conftime,bandwidth,txtype,conc,regions")
+        when (not doesExist) (hPutStrLn h "t,object,conftime,bandwidth,txtype,conc,regions,node")
         forM_ txs $ \tx -> case tx of
-          TxConfirmed t dt -> hPutStrLn h $ intercalate ","
-            [showt (timeToDiffTime t), "tx", showt dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts]
-          TxUnconfirmed _ -> return ()
+          TxConfirmed node t dt -> hPutStrLn h $ intercalate ","
+            [showt (timeToDiffTime t), "tx", showt dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, node]
+          TxUnconfirmed _ _ -> return ()
         forM_ snaps $ \snap -> case snap of
-          SnConfirmed _size t dt -> hPutStrLn h $ intercalate ","
-            [showt (timeToDiffTime t), "snap", showt dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts]
-          SnUnconfirmed _ _ -> return ()
+          SnConfirmed node _size t dt -> hPutStrLn h $ intercalate ","
+            [showt (timeToDiffTime t), "snap", showt dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, node]
+          SnUnconfirmed _ _ _ -> return ()
+
+writeTPS :: CLI -> [TxConfirmed] -> IO ()
+writeTPS opts txs = do
+  let fp = fileTPS opts
+  doesExist <- doesFileExist fp
+  let mode = if doesExist then AppendMode else WriteMode
+  withFile fp mode $ \h -> do
+        when (not doesExist) (hPutStrLn h "tps,bandwidth,txtype,conc,regions")
+        hPutStrLn h $ intercalate ","
+            [show (tps txs), show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts]
+
 
 showt :: DiffTime -> String
-showt x = show (1e-12 * fromInteger (diffTimeToPicoseconds x) :: Double)
+showt = show . diffTimeToSeconds
+
 timeToDiffTime :: Time -> DiffTime
 timeToDiffTime t = t `diffTime` Time 0
+
 showCenterList :: [AWSCenters] -> String
 showCenterList centers = intercalate "-" $ map show centers

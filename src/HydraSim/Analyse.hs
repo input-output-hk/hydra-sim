@@ -10,7 +10,9 @@ module HydraSim.Analyse
    confirmedTxs,
    confirmedSnapshots,
    txsInConfSnap,
-   selectTraceHydraEvents)
+   selectTraceHydraEvents,
+   tps,
+   diffTimeToSeconds)
 where
 
 import           Control.Exception (throw)
@@ -25,6 +27,7 @@ import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import           Data.Set (Set)
 import qualified Data.Set as Set
+import           Data.Time.Clock (diffTimeToPicoseconds)
 import           HydraSim.Multiplexer.Trace
 import           HydraSim.Trace
 import           HydraSim.Tx.Class
@@ -91,16 +94,18 @@ analyseRun quiet run = do
                  ++ show totalTxs ++ " confirmed txs were included in snapshots"
   putStrLn $ intercalate " "
     ["There were", show (length (filter (\tx -> case tx of
-                                            TxConfirmed _ _ -> False
-                                            TxUnconfirmed _ -> True
+                                            TxConfirmed _ _ _ -> False
+                                            TxUnconfirmed _ _ -> True
                                         ) confTxs)),
       "unconfirmed transactions."]
   putStrLn $ intercalate " "
     ["There were", show (length (filter (\tx -> case tx of
-                                            SnConfirmed _ _ _ -> False
-                                            SnUnconfirmed _ _ -> True
+                                            SnConfirmed _ _ _ _ -> False
+                                            SnUnconfirmed _ _ _ -> True
                                         ) confSnaps)),
       "unconfirmed snapshots."]
+  putStrLn $ "Transaction throughput (tx per second): " ++ show (tps confTxs)
+  putStrLn $ "Average tx confirmation time: " ++ show (avgConfTime confTxs )
   return (confTxs, confSnaps)
 
 nodesInTrace :: [HTrace s] -> Set ThreadLabel
@@ -113,21 +118,46 @@ eventsPerNode ts =
 
 data TxConfirmed =
   -- | Transaction, created at time t, got confirmed at time deltaT
-    TxConfirmed Time DiffTime
+    TxConfirmed ThreadLabel Time DiffTime
   -- | Transaction, created at time t, was not confirmed
-  | TxUnconfirmed Time
+  | TxUnconfirmed ThreadLabel Time
   deriving (Eq, Show)
 
 data SnConfirmed =
   -- | Snapshot with n txs, created at time t, got confirmed at time deltaT
-  SnConfirmed Int Time DiffTime
+  SnConfirmed ThreadLabel Int Time DiffTime
   -- | Snapshot with n txs, created at time t, was not confirmed
-  | SnUnconfirmed Int Time
+  | SnUnconfirmed ThreadLabel Int Time
   deriving (Eq, Show)
 
 txsInConfSnap :: SnConfirmed -> Int
-txsInConfSnap (SnConfirmed n _ _) = n
-txsInConfSnap (SnUnconfirmed _ _) = 0
+txsInConfSnap (SnConfirmed _ n _ _) = n
+txsInConfSnap (SnUnconfirmed _ _ _) = 0
+
+tps :: [TxConfirmed] -> Double
+tps txs0 = tps' (filterConfirmedTxs txs0)
+  where
+    tps' [] = 0
+    tps' txs =
+      let TxConfirmed _ (Time t) _ = last txs
+      in fromIntegral (length txs) / diffTimeToSeconds t
+
+avgConfTime :: [TxConfirmed] -> DiffTime
+avgConfTime txs0 =
+  (sum . map getConfTime $ txs) / fromIntegral (length txs)
+  where
+    getConfTime (TxConfirmed _ _ dt) = dt
+    getConfTime (TxUnconfirmed _ _) = error "Unconfirmed tx in avgConfTime"
+    txs = filterConfirmedTxs txs0
+
+filterConfirmedTxs :: [TxConfirmed] -> [TxConfirmed]
+filterConfirmedTxs =
+  filter (\tx -> case tx of
+                   TxConfirmed _ _ _ -> True
+                   TxUnconfirmed _ _ -> False)
+
+diffTimeToSeconds :: DiffTime -> Double
+diffTimeToSeconds t = 1e-12 * fromInteger (diffTimeToPicoseconds t)
 
 confirmedTxs :: [HTrace s] -> [TxConfirmed]
 confirmedTxs ts0 = go ts []
@@ -144,8 +174,8 @@ confirmedTxs ts0 = go ts []
         let t = hTime trace
             node = hNode trace
         in case getConfTime node tx traces of
-          Nothing -> go traces (TxUnconfirmed t:acc)
-          Just t' -> go traces (TxConfirmed t (t' `diffTime` t):acc)
+          Nothing -> go traces (TxUnconfirmed node t:acc)
+          Just t' -> go traces (TxConfirmed node t (t' `diffTime` t):acc)
       _ -> go traces acc
     getConfTime _node _tx [] = Nothing
     getConfTime node tx (trace:traces)
@@ -168,8 +198,8 @@ confirmedSnapshots ts0 = go ts []
             node = hNode trace
             nTxs = length txs
         in case getConfTime node sn traces of
-          Nothing -> go traces (SnUnconfirmed nTxs t:acc)
-          Just t' -> go traces (SnConfirmed nTxs t (t' `diffTime` t):acc)
+          Nothing -> go traces (SnUnconfirmed node nTxs t:acc)
+          Just t' -> go traces (SnConfirmed node nTxs t (t' `diffTime` t):acc)
       _ -> go traces acc
     getConfTime _node _tx [] = Nothing
     getConfTime node sn (trace:traces)
