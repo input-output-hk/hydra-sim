@@ -38,6 +38,7 @@ executable hydra-sim
                      , HydraSim.Types
   -- other-extensions:
   build-depends:       base >=4.12 && <4.13
+                     , ansi-terminal
                      , containers >= 0.6.0.1
                      , contra-tracer
                      , directory

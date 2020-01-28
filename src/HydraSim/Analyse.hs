@@ -33,6 +33,8 @@ import           HydraSim.Trace
 import           HydraSim.Tx.Class
 import           HydraSim.Tx.Mock
 import           HydraSim.Types
+import           Numeric.Natural
+import           System.Console.ANSI
 
 data ShowDebugMessages =
     ShowDebugMessages
@@ -72,41 +74,51 @@ dynamicTracer :: Typeable a => Tracer (SimM s) a
 dynamicTracer = Tracer traceM
 
 analyseRun :: Typeable a
-  => Bool -- ^ quiet mode
+  => Natural -- ^ verbosity level
   -> (forall s. Tracer (SimM s) a -> SimM s ()) -> IO ([TxConfirmed], [SnConfirmed])
-analyseRun quiet run = do
+analyseRun verbosity run = do
   let fullTrace = runSimTrace (run dynamicTracer)
-      trace = selectTraceHydraEvents DontShowDebugMessages fullTrace
+      trace = selectTraceHydraEvents
+        (if verbosity < 4 then DontShowDebugMessages else ShowDebugMessages)
+        fullTrace
       confTxs = confirmedTxs trace
       confSnaps = confirmedSnapshots trace
-  -- putStrLn "trace of TraceProtocolEvent:"
-  -- mapM_ print trace
-  when (not quiet) $ do
+  when (verbosity >= 3) $ do
+    putStrLn "trace of TraceProtocolEvent:"
+    mapM_ print trace
+  when (verbosity >= 2) $ do
     putStrLn "transaction confirmation times:"
     mapM_ print confTxs
     putStrLn "snapshot confirmation times:"
     mapM_ print confSnaps
   let totalTxs = length confTxs
+      totalSnaps = length confSnaps
       txsInSnaps = sum $ txsInConfSnap <$> confSnaps
-  if (totalTxs == txsInSnaps)
-    then putStrLn $ "All " ++ show totalTxs ++ " confirmed txs were included in snapshots"
-    else putStrLn $ "Only " ++ show txsInSnaps ++ " of "
-                 ++ show totalTxs ++ " confirmed txs were included in snapshots"
-  putStrLn $ intercalate " "
-    ["There were", show (length (filter (\tx -> case tx of
+      nUnconfirmedTxs = length $ filter (\tx -> case tx of
                                             TxConfirmed _ _ _ -> False
                                             TxUnconfirmed _ _ -> True
-                                        ) confTxs)),
-      "unconfirmed transactions."]
-  putStrLn $ intercalate " "
-    ["There were", show (length (filter (\tx -> case tx of
+                                        ) confTxs
+      nUnconfirmedSnaps = length $ filter (\tx -> case tx of
                                             SnConfirmed _ _ _ _ -> False
                                             SnUnconfirmed _ _ _ -> True
-                                        ) confSnaps)),
-      "unconfirmed snapshots."]
-  putStrLn $ "Transaction throughput (tx per second): " ++ show (tps confTxs)
-  putStrLn $ "Average tx confirmation time: " ++ show (avgConfTime confTxs )
+                                        ) confSnaps
+  when (totalTxs /= txsInSnaps) $
+    warn $ intercalate " "
+    ["Only", show txsInSnaps, "of", show totalTxs, " txs were included in snapshots"]
+  when (nUnconfirmedTxs > 0) $
+    warn $ intercalate " "
+    ["There were", show nUnconfirmedTxs, "unconfirmed transactions."]
+  when (nUnconfirmedSnaps > 0) $
+    warn $ intercalate " "
+    ["There were", show nUnconfirmedSnaps, "unconfirmed snapshots."]
+  when (verbosity > 0) $ do
+    putStrLn $ "Processed " ++ show totalTxs ++ " transactions."
+    putStrLn $ "Made " ++ show totalSnaps ++ " snapshots."
+    putStrLn $ "Transaction throughput (tx per second): " ++ show (tps confTxs)
+    putStrLn $ "Average tx confirmation time: " ++ show (avgConfTime confTxs )
   return (confTxs, confSnaps)
+  where
+    warn s = setSGR [SetColor Foreground Vivid Red] >> putStrLn s >> setSGR [Reset]
 
 nodesInTrace :: [HTrace s] -> Set ThreadLabel
 nodesInTrace = (Set.delete "main") . Set.fromList . map hNode

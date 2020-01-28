@@ -1,23 +1,23 @@
 module HydraSim.Examples.Nodes
   where
 
-import HydraSim.Examples.Txs
-import HydraSim.Examples.Channels
-import HydraSim.Types
-import HydraSim.Tx.Mock
-import HydraSim.MSig.Mock
-import HydraSim.Sized
-import Data.Time.Clock (DiffTime)
 import Control.Monad.Class.MonadAsync
 import Control.Monad.Class.MonadFork
 import Control.Monad.Class.MonadSTM
 import Control.Monad.Class.MonadSay
+import Control.Monad.Class.MonadThrow
 import Control.Monad.Class.MonadTime
 import Control.Monad.Class.MonadTimer
-import Control.Monad.Class.MonadThrow
 import Control.Tracer
+import Data.Time.Clock (DiffTime)
+import HydraSim.Examples.Channels
+import HydraSim.Examples.Txs
 import HydraSim.HeadNode
+import HydraSim.MSig.Mock
+import HydraSim.Sized
 import HydraSim.Trace
+import HydraSim.Tx.Mock
+import HydraSim.Types
 
 data Txs = Plutus
          | Simple
