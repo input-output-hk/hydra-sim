@@ -55,7 +55,10 @@ newNode conf writeCapacity readCapacity = do
   state <- newTMVarM $ hStateEmpty (hcNodeId conf)
   multiplexer <- newMultiplexer
                  (show . hcNodeId $ conf)
-                 100 100 -- TODO: make this configurable
+                 1000 1000
+                 -- TODO: make buffer sizes configurable. The actual numbers
+                 -- don't really matter, but we do not want to be bounded by
+                 -- this.
                  writeCapacity readCapacity
   return $ HeadNode {
     hnConf = conf,
