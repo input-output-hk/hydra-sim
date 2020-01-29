@@ -9,7 +9,8 @@ import Control.Monad.Class.MonadThrow
 import Control.Monad.Class.MonadTime
 import Control.Monad.Class.MonadTimer
 import Control.Tracer
-import Data.Time.Clock (DiffTime)
+import Data.Time.Clock (DiffTime, diffTimeToPicoseconds)
+import HydraSim.DelayedComp (unComp)
 import HydraSim.Examples.Channels
 import HydraSim.Examples.Txs
 import HydraSim.HeadNode
@@ -31,6 +32,74 @@ data NodeSpec = NodeSpec {
   nodeTxNumber :: Int,
   nodeTxConcurrency :: Int
   } deriving Show
+
+-- | The maximal performance of the system we could expect (ignoring checkpointing)
+--
+-- The minimal confirmation time for a transaction is a sum of
+--
+-- - 2x validation time (once at the node that's sending the tx, once at every
+--   other node)
+--
+-- - the time it takes for both the @SigReqTx@ and @SigAckTx@ messages to pass
+--   through a networking interface
+--
+-- - the time it takes to sign a transaction, aggregate signatures, and confirm
+-- - an aggregate signature
+--
+-- - the longest round-trip time to any other node
+--
+-- The longest round-trip time to any of its peers will in general be different
+-- for each node, so we get a different minimal confirmation time per node.
+--
+--
+-- The transaction throughput is limited by two factors:
+--
+-- - the network bandwidth: we cannot process transactions faster than
+--   continuously sending the largest message involved in tx confirmation.
+--
+-- - CPU power: assuming the protocol is executed sequentially (which we could
+--   relax), we achieve maximal throughput when all nodes are continuously busy
+--   with validating txs, signing, aggregating signatures, and verifying
+--   aggregate signatures. Since the computational load differs between a node
+--   that's submitting txs and nodes signing them, and all nodes have both
+--   roles, we take the weighted average.
+--
+-- Whichever limit is lower determines the maximal throughput we could achieve.
+--
+-- TODO: we hardcode the multi-sig timings, in two different places. We should
+-- change that.
+performanceLimit :: [NodeSpec] -> ([(AWSCenters, DiffTime)], Double)
+performanceLimit nodeSpecs = (minConfTime, maxTPS)
+  where
+    minConfTime = [(region, sum [roundTrip, squeezeThrough, sign, 2 * validationTime])
+                  | (region, roundTrip) <- roundTrips]
+    maxTPS = min throughputBound cpuBound
+    throughputBound = minimum
+                      [  perSecond (((cap reqMsgSize) + otherNodes * (cap ackMsgSize)) / allNodes)
+                      | cap <- capacities ]
+    cpuBound = perSecond (((2*validationTime + 0.0015) + otherNodes * (validationTime + 0.0005))/allNodes)
+    roundTrips = [ (y, 2 * maximum
+                   [ getSOrError x y
+                   | x <- nodeRegion <$> nodeSpecs
+                   ])
+                 | y <- nodeRegion <$> nodeSpecs]
+    squeezeThrough = maximum
+      [ cap reqMsgSize + cap ackMsgSize
+      | cap <- capacities ]
+    capacities = kBitsPerSecond . nodeNetworkCapacity <$> nodeSpecs
+    sampleTx = case nodeTxs (head nodeSpecs) of
+       Simple -> cardanoTx (TxId 0) 2
+       Plutus -> plutusTx (TxId 0)
+    reqMsgSize = size $ SigReqTx sampleTx
+    ackMsgSize = size $ SigAckTx (mtxRef sampleTx) sampleSig
+    sampleSig = unComp (ms_sig_tx simpleMsig (SKey 0) sampleTx)
+    sign = 0.0015
+    validationTime = mtxValidationDelay sampleTx
+    allNodes = fromIntegral $ length nodeSpecs
+    otherNodes = fromIntegral $ length nodeSpecs - 1
+
+perSecond :: DiffTime -> Double
+perSecond t = 1e12 / fromIntegral (diffTimeToPicoseconds t)
 
 runNodes
   :: ( MonadTimer m, MonadSTM m, MonadSay m, MonadFork m, MonadAsync m,

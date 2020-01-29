@@ -1,5 +1,5 @@
 module HydraSim.Examples.Channels
-  (AWSCenters (..), channel)
+  (AWSCenters (..), channel, getSOrError)
   where
 
 import Control.Monad.Class.MonadAsync
@@ -32,9 +32,14 @@ channel :: (MonadAsync m, MonadSTM m, MonadTimer m, MonadTime m,
   => AWSCenters -> AWSCenters
   -> m (Channel m a, Channel m a)
 channel loc loc' =
+  createConnectedConstDelayChannels (getSOrError loc loc')
+
+-- | Get the @S@ for two data centers. Errors if the list is incomplete.
+getSOrError :: AWSCenters -> AWSCenters -> DiffTime
+getSOrError loc loc' =
   case (getS loc loc', getS loc' loc) of
-    (Just s, _) -> createConnectedConstDelayChannels s
-    (_, Just s) -> createConnectedConstDelayChannels s
+    (Just s, _) -> s
+    (_, Just s) -> s
     _ -> error $ "Can't get s for " ++ show (loc, loc')
 
 getS :: AWSCenters -> AWSCenters -> Maybe DiffTime

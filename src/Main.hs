@@ -65,10 +65,14 @@ main = do
                  }
   when (verbosity opts > 0) $ print opts
   (txs, snaps) <- analyseRun (verbosity opts) (runNodes specs)
-  writeCSV opts txs snaps
+  writeCSV opts specs txs snaps
+  when (verbosity opts > 0) $ do
+    let (minConfTime, maxTPS) = performanceLimit specs
+    putStrLn $ concat ["Minimal confirmation time: ", show $ minConfTime]
+    putStrLn $ concat ["Maximal throughput: ", show $ maxTPS]
 
-writeCSV :: CLI -> [TxConfirmed] -> [SnConfirmed] -> IO ()
-writeCSV opts txs snaps = do
+writeCSV :: CLI -> [NodeSpec] -> [TxConfirmed] -> [SnConfirmed] -> IO ()
+writeCSV opts specs txs snaps = do
   let fp = output opts
   doesExist <- doesFileExist fp
   let mode = if doesExist then AppendMode else WriteMode
@@ -83,7 +87,10 @@ writeCSV opts txs snaps = do
           SnConfirmed node _size t dt -> hPutStrLn h $ intercalate ","
             [showt (timeToDiffTime t), "snap", showt dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, node, show tpsInRun]
           SnUnconfirmed _ _ _ -> return ()
-
+        let (minConfTimes, maxTPS) = performanceLimit specs
+        forM_ minConfTimes $ \(region, minConfTime) ->
+          hPutStrLn h $ intercalate ","
+          [showt 0, "tx-baseline", showt minConfTime, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, show region, show $ maxTPS]
 showt :: DiffTime -> String
 showt = show . diffTimeToSeconds
 

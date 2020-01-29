@@ -151,8 +151,8 @@ tps txs0 = tps' (filterConfirmedTxs txs0)
   where
     tps' [] = 0
     tps' txs =
-      let TxConfirmed _ (Time t) _ = last txs
-      in fromIntegral (length txs) / diffTimeToSeconds t
+      let Time endTime = maximum [dt `addTime` t | TxConfirmed _ t dt <- txs]
+      in fromIntegral (length txs) / diffTimeToSeconds endTime
 
 avgConfTime :: [TxConfirmed] -> DiffTime
 avgConfTime txs0 =
