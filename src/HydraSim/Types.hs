@@ -139,7 +139,7 @@ data Tx tx => HState tx = HState {
   -- | Set of "in flight" transactions (transactions we have sent that are not
   -- yet confirmed).
   hsTxsInflight :: !(Set (TxRef tx))
-  }
+  } deriving Eq
 -- We'll want to show a node's state for debugging, but we want a custom
 -- instance, suppressing showing the channels (which don't have a Show
 -- instance), and the actual transactions (which would be too vebose -- but we
@@ -219,7 +219,8 @@ instance Tx tx => Sized (HeadProtocol tx) where
   size (SigAckSn snapN sig) = messageHeaderSize + size snapN + size sig
   size (SigConfSn snapN asig) = messageHeaderSize + size snapN + size asig
 messageHeaderSize :: Size
-messageHeaderSize = 16 -- TODO: is this a realistic overhead?
+messageHeaderSize = 2 -- Given that we only have a handful of different message
+                      -- in the protocol, this should be plenty.
 
 -- | Decision of the node what to do in response to an event.
 data Decision tx =

@@ -7,15 +7,15 @@ module HydraSim.Channel
     mvarsAsChannel,
     createConnectedChannels,
     createConnectedBoundedChannels,
-    createConnectedDelayChannels
+    createConnectedDelayChannels,
+    createConnectedConstDelayChannels
   ) where
 
-import Control.Monad (forever, void)
+import Control.Monad (when, forever, void)
 import Control.Monad.Class.MonadAsync
 import Control.Monad.Class.MonadSTM
 import Control.Monad.Class.MonadTime
 import Control.Monad.Class.MonadTimer
-import Control.Tracer
 import Data.Time.Clock (DiffTime,
                         diffTimeToPicoseconds,
                         picosecondsToDiffTime)
@@ -107,7 +107,7 @@ createConnectedBoundedChannels sz = do
 --
 createConnectedDelayChannels
   :: forall m prng a.
-     (MonadAsync m, MonadSTM m, MonadTime m, MonadTimer m, RandomGen prng, Show a)
+     (MonadAsync m, MonadSTM m, MonadTime m, MonadTimer m, RandomGen prng)
   => (DiffTime, DiffTime) -- ^ GV
   -> prng         -- ^ PRNG for sampling V
   -> m (Channel m a, Channel m a)
@@ -162,7 +162,61 @@ createConnectedDelayChannels (g, v) prng0 = do
           (arrive, x) <- atomically $ readTQueue prebuffer
           now <- getMonotonicTime
           let delay = arrive `diffTime` now
-          if delay > 0
-            then threadDelay delay
-            else traceWith debugTracer $ "Enforcing message order, delay " ++ show delay ++ ", message " ++ show x
+          when (delay > 0) (threadDelay delay)
+          atomically $ writeTQueue buffer x
+
+-- | A special case of 'createConnectedDelayChannels', without variance.
+--
+-- In the 'HydraSim.Multiplexer', we introduce the variance through the
+-- contention in the networking interfaces, instead of it being a property of
+-- the network between nodes.
+createConnectedConstDelayChannels
+  :: forall m a.
+     (MonadAsync m, MonadSTM m, MonadTime m, MonadTimer m)
+  => DiffTime -- ^ G
+  -> m (Channel m a, Channel m a)
+createConnectedConstDelayChannels g = do
+    -- For each direction, create:
+    --  - an intermediate  TQueue for the messages and their arrival time
+    --  - a TQueue for the messages
+    bufferA <- atomically $ (,) <$> newTQueue <*> newTQueue
+    bufferB <- atomically $ (,) <$> newTQueue <*> newTQueue
+
+    void . async $ propagate bufferA
+    void . async $ propagate bufferB
+
+    return (asChannel bufferB bufferA,
+            asChannel bufferA bufferB)
+  where
+
+    asChannel :: (TQueue m (Time, a), TQueue m a)
+              -> (TQueue m (Time, a), TQueue m a)
+              -> Channel m a
+    asChannel (_rPrebuffer, rBuffer)
+              (wPrebuffer, _wBuffer) =
+        Channel{send, recv}
+      where
+        -- send does not immediately write to the message buffer. Instead, it
+        -- writes the message, together with its calculated arrival time, into
+        -- an intermediate buffer.
+        --
+        -- 'propagate' will move it from the intermediate buffer to the message
+        -- buffer, but not before the arrival time.
+        send x = do
+          now <- getMonotonicTime
+          atomically $
+            let arrive = g `addTime` now
+            in writeTQueue wPrebuffer (arrive, x)
+
+        recv = readTQueue rBuffer
+
+    -- this takes a message from the intermediate buffer, and puts it into the
+    -- message buffer. If the arrival time of the message is in the future, it
+    -- delays until the arrival time before that.
+    propagate :: (TQueue m (Time, a), TQueue m a) -> m ()
+    propagate (prebuffer, buffer) = forever $ do
+          (arrive, x) <- atomically $ readTQueue prebuffer
+          now <- getMonotonicTime
+          let delay = arrive `diffTime` now
+          when (delay > 0) (threadDelay delay)
           atomically $ writeTQueue buffer x

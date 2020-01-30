@@ -5,11 +5,13 @@ module HydraSim.HeadNode
   ( HeadNode,
     newNode,
     connectNodes,
-    startNode
+    startNode,
+    traceState
   ) where
 
 import           Control.Monad (forever, void)
 import           Control.Monad.Class.MonadAsync
+import           Control.Monad.Class.MonadFork (myThreadId, labelThread)
 import           Control.Monad.Class.MonadSTM
 import           Control.Monad.Class.MonadThrow
 import           Control.Monad.Class.MonadTimer
@@ -51,7 +53,12 @@ newNode
   -> m (HeadNode m tx)
 newNode conf writeCapacity readCapacity = do
   state <- newTMVarM $ hStateEmpty (hcNodeId conf)
-  multiplexer <- newMultiplexer 100 100 -- TODO: make this configurable
+  multiplexer <- newMultiplexer
+                 (show . hcNodeId $ conf)
+                 1000 1000
+                 -- TODO: make buffer sizes configurable. The actual numbers
+                 -- don't really matter, but we do not want to be bounded by
+                 -- this.
                  writeCapacity readCapacity
   return $ HeadNode {
     hnConf = conf,
@@ -92,11 +99,24 @@ startNode
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 startNode tracer hn = void $
-  concurrently (listener tracer hn) $
+  concurrently (labelThisThread >> listener tracer hn) $
   concurrently (startMultiplexer mpTracer (hnMultiplexer hn)) $
-  concurrently (txSender tracer hn) (snDaemon tracer hn)
+  concurrently (labelThisThread >> txSender tracer hn)
+               (labelThisThread >> snDaemon tracer hn)
   where
     mpTracer = contramap HydraMessage tracer
+    nodeLabel = (show . hcNodeId . hnConf $ hn)
+    labelThisThread = do
+      myId <- myThreadId
+      labelThread myId nodeLabel
+
+-- | write the current state to the trace
+traceState
+  :: (MonadSTM m, Tx tx)
+  => Tracer m (TraceHydraEvent tx) -> HeadNode m tx -> m ()
+traceState tracer hn = do
+  s <- atomically $ readTMVar (hnState hn)
+  traceWith tracer $ HydraState s
 
 -- | Add a message from the client (as opposed to from a node) to the message queue.
 --

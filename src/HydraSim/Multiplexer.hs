@@ -6,8 +6,8 @@ We model the timing of messages being sent between nodes in a network.
 
 The network itself is modelled by a delay in time between each message leaving
 the sending node and its arrival at the target node. The delay is determined by
-the distance between nodes, and is constant for any pair of nodes. In
-particular, it does not depend on the message size.
+the distance between nodes, plus a given random variance. In particular, it does
+not depend on the message size.
 
 Before being sent across the network, each message has to be serialised. So the
 event of a message being sent (or being received) by a node does not correspond
@@ -82,8 +82,9 @@ module HydraSim.Multiplexer
   )
 where
 
-import           Control.Monad (forever, void, forM_)
+import           Control.Monad (forever, forM_, void, when)
 import           Control.Monad.Class.MonadAsync
+import           Control.Monad.Class.MonadFork (MonadThread, myThreadId, labelThread)
 import           Control.Monad.Class.MonadSTM
 import           Control.Monad.Class.MonadThrow
 import           Control.Monad.Class.MonadTimer
@@ -91,7 +92,7 @@ import           Control.Tracer
 import           Data.List (break)
 import           Data.Map (Map)
 import qualified Data.Map as Map
-import           Data.Time.Clock (DiffTime)
+import           Data.Time.Clock (DiffTime, picosecondsToDiffTime)
 import           HydraSim.Channel
 import           HydraSim.Multiplexer.Exception
 import           HydraSim.Multiplexer.Trace
@@ -124,13 +125,16 @@ data Multiplexer m a = Multiplexer {
   -- given size.
   mpWriteCapacity :: Size -> DiffTime,
   -- | Read capacity
-  mpReadCapacity :: Size -> DiffTime
+  mpReadCapacity :: Size -> DiffTime,
+  -- | Threads from this @Multiplexer@ will have this label
+  mpThreadLabel :: String
   }
 
 -- | Create a new 'Multiplexer'.
 newMultiplexer
   :: MonadSTM m
-  => Natural -- ^ Buffer size for outbound message queue
+  => String -- ^ Threads from this @Multiplexer@ will have this label
+  -> Natural -- ^ Buffer size for outbound message queue
   -> Natural -- ^ Buffer size for incoming message queue
   -> (Size -> DiffTime)
   -- ^ Write capacity
@@ -139,7 +143,7 @@ newMultiplexer
   -- given size.
   -> (Size -> DiffTime) -- ^ Read capacity.
   -> m (Multiplexer m a)
-newMultiplexer outBufferSize inBufferSize writeCapacity readCapacity = do
+newMultiplexer label outBufferSize inBufferSize writeCapacity readCapacity = do
   outQueue <- atomically $ newTBQueue outBufferSize
   inQueue <- atomically $ newTBQueue inBufferSize
   channels <- atomically $ newTVar (Map.empty)
@@ -148,7 +152,8 @@ newMultiplexer outBufferSize inBufferSize writeCapacity readCapacity = do
     mpInQueue = inQueue,
     mpChannels = channels,
     mpWriteCapacity = writeCapacity,
-    mpReadCapacity = readCapacity
+    mpReadCapacity = readCapacity,
+    mpThreadLabel = label
     }
 
 -- | Connect two nodes.
@@ -182,7 +187,14 @@ startMultiplexer
   -> Multiplexer m a
   -> m ()
 startMultiplexer tracer mp = void $
-  concurrently (messageSender tracer mp) (messageReceiver tracer mp)
+  concurrently (labelThisThread mp >> messageSender tracer mp)
+               (labelThisThread mp >> messageReceiver tracer mp)
+  where
+
+labelThisThread :: MonadThread m => Multiplexer m a -> m ()
+labelThisThread mp = do
+  myId <- myThreadId
+  labelThread myId (mpThreadLabel mp)
 
 -- | Place a message in the outgoing queue, so that it will be sent by
 -- 'messageSender' once the network interface has capacity.
@@ -230,19 +242,38 @@ sendToSelf tracer mp nodeId ms = do
 
 -- | Put a message back in the local 'mpInQueue', to be processed later.
 --
--- In case 'mpInQueue' is currently empty, this will wait (in a non-blocking
--- manner) until another message arrives.
+-- In the case where the queue is currently empty, we need to allow for some
+-- time to pass; otherwise, the node will loop forever, effectively stopping
+-- time from progressing in the simulation, and no new messages will be received
+-- ever.
+--
+-- In an earlier version, we just waited for the queue to become non-empty, but
+-- this allows for a race condition where another message would arrive
+-- /and be taken from the queue/ before the first message was re-enqueued, and
+-- the queue would again be empty. So instead, if the queue is empty, we delay
+-- reenqueueing by 5 ms, ensuring that time will progress (even if we might
+-- reenqueue the message a couple of times before another message arrives.)
+--
+-- TODO: A cleaner design would be to not put the message back into the queue at
+-- all, and rather have a separate buffer in the node itself, for messages that
+-- are currently waiting. Before getting the next message from the queue, the
+-- node would check whether any of the waiting messages can be processed.
 reenqueue
-  :: (MonadSTM m, MonadAsync m)
+  :: (MonadSTM m, MonadAsync m, MonadTimer m)
   => Tracer m (TraceMultiplexer a)
   -> Multiplexer m a
   -> (NodeId, a)
   -> m ()
 reenqueue tracer mp (peer, ms) = void $ async $ do
-  atomically $ (isEmptyTBQueue (mpInQueue mp)) >>= \case
-    True -> retry -- Do not put it back in the queue if the queue is empty,
-                  -- otherwise we'll just loop forever!
-    False -> writeTBQueue (mpInQueue mp) (peer, ms)
+  labelThisThread mp
+  queueWasEmpty <- atomically $ (isEmptyTBQueue (mpInQueue mp)) >>= \case
+    True -> return True
+    False -> do
+      writeTBQueue (mpInQueue mp) (peer, ms)
+      return False
+  when (queueWasEmpty) $ do
+    threadDelay (picosecondsToDiffTime $ round (5e9 :: Double)) -- allow time for other messages to arrive
+    atomically $ writeTBQueue (mpInQueue mp) (peer, ms)
   traceWith tracer $ MPReenqueue peer ms
 
 -- | Retrieve the next message in the 'mpInQueue'.

@@ -18,8 +18,12 @@ extra-source-files:  CHANGELOG.md
 executable hydra-sim
   hs-source-dirs:      src
   main-is:             Main.hs
-  other-modules:       HydraSim.Channel
+  other-modules:       HydraSim.Analyse
+                     , HydraSim.Channel
                      , HydraSim.DelayedComp
+                     , HydraSim.Examples.Channels
+                     , HydraSim.Examples.Nodes
+                     , HydraSim.Examples.Txs
                      , HydraSim.HeadNode
                      , HydraSim.HeadNode.Handler
                      , HydraSim.MSig.Mock
@@ -34,12 +38,15 @@ executable hydra-sim
                      , HydraSim.Types
   -- other-extensions:
   build-depends:       base >=4.12 && <4.13
+                     , ansi-terminal
+                     , containers >= 0.6.0.1
                      , contra-tracer
+                     , directory
                      , io-sim
                      , io-sim-classes
+                     , optparse-applicative
                      , random
                      , time >= 1.8.0.2
-                     , containers >= 0.6.0.1
   -- hs-source-dirs:
   default-language:    Haskell2010
   ghc-options:         -Wall
