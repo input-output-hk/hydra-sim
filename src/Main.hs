@@ -53,7 +53,7 @@ cli = CLI
                     <> value (SnapAfter 1)))
   <*> (option auto (long "aggregate-signature-time"
                     <> help "time (in seconds) for MSig operations (signing, aggregating, validating)"
-                    <> value (0.0005, 0.0005, 0.0005)
+                    <> value (0.00015, 0.000010, 0.00085)
                     <> metavar "(T_SIGN, T_AGGREGATE, T_VERIFY)"))
   <*> (strOption (short 'o'
                    <> long "output"

@@ -20,10 +20,8 @@ cardanoTx
   -> MockTx
 cardanoTx txref nInOuts = MockTx {
   mtxRef = txref,
-  -- we do not have microbenchmarks for transaction validation at the moment,
-  -- but we do know that we are not hitting the limit with 150 transactions
-  -- per second.
-  mtxValidationDelay = millisecondsToDiffTime 2,
+  -- we have an upper bound of 0.4 ms validation time for Cardano transactions.
+  mtxValidationDelay = picosecondsToDiffTime 4 * 1e8,
   -- this is a rough fit for measured transaction sizes.
   mtxSize = Size $ 65 + 100 * nInOuts }
 
@@ -40,7 +38,7 @@ plutusTx txref = MockTx {
   mtxRef = txref,
   -- Measurements of exemplatory use cases for Plutus gave us execution times of
   -- 1-5 milliseconds, with a mean of about 2.56 (on a laptop with a 1.6GHz
-  -- cpu). Together with the overhead for signature checking, etc., we use a
-  -- delay of 4 milliseconds.
-  mtxValidationDelay = millisecondsToDiffTime 4,
+  -- cpu). Together with the overhead for other checks, we use a delay of 3
+  -- milliseconds.
+  mtxValidationDelay = millisecondsToDiffTime 3,
   mtxSize = Size $ 10 * 1024 }
