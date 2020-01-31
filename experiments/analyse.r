@@ -88,6 +88,11 @@ plot_conftime_bandwidth(subset(data, regions == 'FrankfurtAWS-FrankfurtAWS-Frank
                         subtitle = 'Three nodes in same AWS region')
 ggsave(filename = 'pdf/conftime-simple-local.pdf', width = 16, height = 9)
 
+plot_conftime_bandwidth(subset(data, (regions == 'FrankfurtAWS-FrankfurtAWS-FrankfurtAWS') & (group %in% c('1', 'limit'))),
+                        subtitle = 'Three nodes in same AWS region') + facet_wrap(~ regions)
+ggsave(filename = 'pdf/conftime-simple-local-conc1.pdf', width = 16, height = 9)
+
+
 plot_conftime_bandwidth(subset(data, regions == 'IrelandAWS-FrankfurtAWS-LondonAWS'),
                    subtitle = 'Three nodes in Europe (Ireland, Frankfurt, London)')
 ggsave(filename = 'pdf/conftime-simple-europe.pdf', width = 16, height = 9)
@@ -152,5 +157,3 @@ plot_conc(concdata,
           rescale = 100) +
   facet_wrap(~ regions)
 ggsave(filename = 'pdf/tradeoff-simple.pdf', width = 16, height = 9)
-
-
