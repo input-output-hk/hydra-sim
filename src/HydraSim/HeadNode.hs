@@ -221,7 +221,7 @@ snDaemon
   -> HeadNode m tx -> m ()
 snDaemon tracer hn = case hcSnapshotStrategy conf of
   NoSnapshots -> return ()
-  SnapAfterNTxs n ->
+  SnapAfter n ->
     let
       waitForOurTurn :: SnapN -> STM m SnapN
       waitForOurTurn lastSn = do

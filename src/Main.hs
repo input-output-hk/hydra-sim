@@ -7,10 +7,12 @@ import Data.Semigroup ((<>))
 import HydraSim.Analyse
 import HydraSim.Examples.Channels
 import HydraSim.Examples.Nodes
+import HydraSim.Types
 import Numeric.Natural
 import Options.Applicative
 import System.Directory (doesFileExist)
 import System.IO
+import Data.Time.Clock (DiffTime, picosecondsToDiffTime)
 
 data CLI = CLI {
   regions :: [AWSCenters],
@@ -18,7 +20,10 @@ data CLI = CLI {
   txType :: Txs,
   concurrency :: Natural,
   numberTxs :: Natural,
+  snapStrategy :: SnapStrategy,
+  asigTime :: Double,
   output :: FilePath,
+  discardEdges :: Int,
   verbosity :: Natural
   } deriving Show
 
@@ -41,10 +46,21 @@ cli = CLI
   <*> (option auto (short 'n'
                     <> value 50
                     <> help "Number of transactions each node will send."))
+  <*> (option auto (long "snapshots"
+                    <> help "Sets the strategy for when to create snapshots"
+                    <> metavar "NoSnapshots | SnapAfter N"
+                    <> value (SnapAfter 1)))
+  <*> (option auto (long "aggregate-signature-time"
+                    <> help "time (in seconds) for MSig operations (signing, aggregating, validating)"
+                    <> value 0.0005))
   <*> (strOption (short 'o'
-                    <> long "output"
-                    <> help "Write output to CSV file"
-                    <> value "out.csv" ))
+                   <> long "output"
+                   <> help "Write output to CSV file"
+                   <> value "out.csv" ))
+  <*> (option auto (long "discard-edges"
+                    <> help "When writing data for confirmation time, discard the first and last N samples (allow for warmup/cooldown)"
+                    <> metavar "N"
+                    <> value 0))
   <*> (option auto (short 'v'
                     <> long "verbosity"
                     <> value 1
@@ -61,7 +77,9 @@ main = do
                   nodeNetworkCapacity = fromIntegral $ networkCapacity opts,
                   nodeTxs = txType opts,
                   nodeTxConcurrency = fromIntegral $ concurrency opts,
-                  nodeTxNumber = fromIntegral $ numberTxs opts
+                  nodeTxNumber = fromIntegral $ numberTxs opts,
+                  nodeSnapStrategy = snapStrategy opts,
+                  nodeASigTime = secondsToDiffTime $ asigTime opts
                  }
   when (verbosity opts > 0) $ print opts
   (txs, snaps) <- analyseRun (verbosity opts) (runNodes specs)
@@ -71,6 +89,9 @@ main = do
     putStrLn $ concat ["Minimal confirmation time: ", show $ minConfTime]
     putStrLn $ concat ["Maximal throughput: ", show $ maxTPS]
 
+secondsToDiffTime :: Double -> DiffTime
+secondsToDiffTime = picosecondsToDiffTime . round . (*1e12)
+
 writeCSV :: CLI -> [NodeSpec] -> [TxConfirmed] -> [SnConfirmed] -> IO ()
 writeCSV opts specs txs snaps = do
   let fp = output opts
@@ -79,7 +100,7 @@ writeCSV opts specs txs snaps = do
   withFile fp mode $ \h -> do
         when (not doesExist) (hPutStrLn h "t,object,conftime,bandwidth,txtype,conc,regions,node,tps")
         let tpsInRun = tps txs
-        forM_ txs $ \tx -> case tx of
+        forM_ (drop (discardEdges opts) . reverse . drop (discardEdges opts) $ txs) $ \tx -> case tx of
           TxConfirmed node t dt -> hPutStrLn h $ intercalate ","
             [showt (timeToDiffTime t), "tx", showt dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, node, show tpsInRun]
           TxUnconfirmed _ _ -> return ()

@@ -30,7 +30,9 @@ data NodeSpec = NodeSpec {
   nodeNetworkCapacity :: Integer,
   nodeTxs :: Txs,
   nodeTxNumber :: Int,
-  nodeTxConcurrency :: Int
+  nodeTxConcurrency :: Int,
+  nodeSnapStrategy :: SnapStrategy,
+  nodeASigTime :: DiffTime
   } deriving Show
 
 -- | The maximal performance of the system we could expect (ignoring checkpointing)
@@ -65,19 +67,16 @@ data NodeSpec = NodeSpec {
 --   roles, we take the weighted average.
 --
 -- Whichever limit is lower determines the maximal throughput we could achieve.
---
--- TODO: we hardcode the multi-sig timings, in two different places. We should
--- change that.
 performanceLimit :: [NodeSpec] -> ([(AWSCenters, DiffTime)], Double)
 performanceLimit nodeSpecs = (minConfTime, maxTPS)
   where
-    minConfTime = [(region, sum [roundTrip, squeezeThrough, sign, 2 * validationTime])
+    minConfTime = [(region, sum [roundTrip, squeezeThrough, 3*asigTime, 2 * validationTime])
                   | (region, roundTrip) <- roundTrips]
     maxTPS = min throughputBound cpuBound
     throughputBound = minimum
                       [  perSecond (((cap reqMsgSize) + otherNodes * (cap ackMsgSize)) / allNodes)
                       | cap <- capacities ]
-    cpuBound = perSecond (((2*validationTime + 0.0015) + otherNodes * (validationTime + 0.0005))/allNodes)
+    cpuBound = perSecond (((validationTime + 3*asigTime) + otherNodes * (validationTime + 2*asigTime))/allNodes)
     roundTrips = [ (y, 2 * maximum
                    [ getSOrError x y
                    | x <- nodeRegion <$> nodeSpecs
@@ -92,8 +91,8 @@ performanceLimit nodeSpecs = (minConfTime, maxTPS)
        Plutus -> plutusTx (TxId 0)
     reqMsgSize = size $ SigReqTx sampleTx
     ackMsgSize = size $ SigAckTx (mtxRef sampleTx) sampleSig
-    sampleSig = unComp (ms_sig_tx simpleMsig (SKey 0) sampleTx)
-    sign = 0.0015
+    sampleSig = unComp (ms_sig_tx (simpleMsig asigTime) (SKey 0) sampleTx)
+    asigTime = maximum (nodeASigTime <$> nodeSpecs)
     validationTime = mtxValidationDelay sampleTx
     allNodes = fromIntegral $ length nodeSpecs
     otherNodes = fromIntegral $ length nodeSpecs - 1
@@ -125,9 +124,9 @@ runNodes nodeSpecs tracer = do
         nodeConf = NodeConf {
           hcNodeId = NodeId i,
           hcTxSendStrategy = sendStrategy i nspec,
-          hcMSig = simpleMsig,
+          hcMSig = simpleMsig (nodeASigTime nspec),
           hcLeaderFun = \(SnapN s) -> NodeId (s `mod` nNodes),
-          hcSnapshotStrategy = SnapAfterNTxs 1
+          hcSnapshotStrategy = nodeSnapStrategy nspec
           }
         rate = kBitsPerSecond (nodeNetworkCapacity nspec)
     node <- newNode nodeConf rate rate
@@ -143,13 +142,13 @@ kBitsPerSecond :: Integer -> (Size -> DiffTime)
 kBitsPerSecond rate = \(Size bytes) -> (fromIntegral bytes) * (fromRational $ recip $ (1024 * toRational rate ) / 8)
 
 -- TODO: This needs to be checked!
-simpleMsig :: MS MockTx
-simpleMsig = MS {
-  ms_sig_tx = ms_sign_delayed 0.0005,
-  ms_asig_tx = ms_asig_delayed 0.0005,
-  ms_verify_tx = ms_verify_delayed 0.0005,
+simpleMsig :: DiffTime -> MS MockTx
+simpleMsig t = MS {
+  ms_sig_tx = ms_sign_delayed t,
+  ms_asig_tx = ms_asig_delayed t,
+  ms_verify_tx = ms_verify_delayed t,
 
-  ms_sig_sn = ms_sign_delayed 0.0005,
-  ms_asig_sn = ms_asig_delayed 0.0005,
-  ms_verify_sn = ms_verify_delayed 0.0005
+  ms_sig_sn = ms_sign_delayed t,
+  ms_asig_sn = ms_asig_delayed t,
+  ms_verify_sn = ms_verify_delayed t
 }

@@ -94,7 +94,8 @@ data SnapStrategy =
     NoSnapshots
   -- | After a number of transactions have been confirmed, a snapshot is
   -- created.
-  | SnapAfterNTxs Int
+  | SnapAfter Int
+  deriving (Show, Read)
 
 -- Multi-sig functionality
 data Tx tx => MS tx = MS {
