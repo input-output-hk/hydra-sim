@@ -32,7 +32,7 @@ data NodeSpec = NodeSpec {
   nodeTxNumber :: Int,
   nodeTxConcurrency :: Int,
   nodeSnapStrategy :: SnapStrategy,
-  nodeASigTime :: DiffTime
+  nodeASigTime :: (DiffTime, DiffTime, DiffTime)
   } deriving Show
 
 -- | The maximal performance of the system we could expect (ignoring checkpointing)
@@ -56,35 +56,50 @@ data NodeSpec = NodeSpec {
 --
 -- The transaction throughput is limited by two factors:
 --
--- - the network bandwidth: we cannot process transactions faster than
---   continuously sending the largest message involved in tx confirmation.
+-- - the network bandwidth: we hit a limit as soon as any one networking
+--   interface is running out of capacity. When @n@ nodes each send
+--   transactions, each node will
 --
--- - CPU power: assuming the protocol is executed sequentially (which we could
---   relax), we achieve maximal throughput when all nodes are continuously busy
---   with validating txs, signing, aggregating signatures, and verifying
---   aggregate signatures. Since the computational load differs between a node
---   that's submitting txs and nodes signing them, and all nodes have both
---   roles, we take the weighted average.
+--   1. Send @n-1@ 'SigReqTx' messages, and receive @n-1@ 'SigAckTx' messages,
+--   to get one transaction confirmed
+--
+--   2. Receive @n-1@ 'SigReqTx' messages, and send @n-1@ 'SigAckTx' messages,
+--   to confirm the @n-1@ transactions from other nodes.
+--
+--   After one such step, @n@ transactions will be confirmed. Every node will
+--   have sent and received @n-1@ messages of both 'SigReqTx' and 'SigAckTx'.
+--
+-- - CPU power: For each transaction, the main thread of each node will have to
+--   validate the transaction, and verify the aggregate signature (signing and
+--   aggregating signatures is done in spawned threads, which is safe since it
+--   does not have to access any state). This puts a limit on the transaction
+--   rate a node can process.
 --
 -- Whichever limit is lower determines the maximal throughput we could achieve.
 performanceLimit :: [NodeSpec] -> ([(AWSCenters, DiffTime)], Double)
 performanceLimit nodeSpecs = (minConfTime, maxTPS)
   where
-    minConfTime = [(region, sum [roundTrip, squeezeThrough, 3*asigTime, 2 * validationTime])
-                  | (region, roundTrip) <- roundTrips]
+    minConfTime = [ (region, sum [
+                        validationTime, -- at the issuer
+                        maximum [cap reqMsgSize | cap <- capacities],
+                        networkDelay,
+                        validationTime, -- at each other node (in parallel)
+                        signTime,
+                        maximum [cap ackMsgSize | cap <- capacities],
+                        networkDelay,
+                        aggregateTime,
+                        verifySigTime])
+                  | (region, networkDelay) <- networkDelays]
     maxTPS = min throughputBound cpuBound
     throughputBound = minimum
-                      [  perSecond (((cap reqMsgSize) + otherNodes * (cap ackMsgSize)) / allNodes)
+                      [ (perSecond (otherNodes * (cap (ackMsgSize + reqMsgSize)) / allNodes))
                       | cap <- capacities ]
-    cpuBound = perSecond $ validationTime + asigTime
-    roundTrips = [ (y, 2 * maximum
-                   [ getSOrError x y
-                   | x <- nodeRegion <$> nodeSpecs
-                   ])
-                 | y <- nodeRegion <$> nodeSpecs]
-    squeezeThrough = maximum
-      [ cap reqMsgSize + cap ackMsgSize
-      | cap <- capacities ]
+    cpuBound = perSecond $ validationTime + verifySigTime
+    networkDelays = [ (y, maximum
+                        [ getSOrError x y
+                        | x <- nodeRegion <$> nodeSpecs
+                        ])
+                    | y <- nodeRegion <$> nodeSpecs]
     capacities = kBitsPerSecond . nodeNetworkCapacity <$> nodeSpecs
     sampleTx = case nodeTxs (head nodeSpecs) of
        Simple -> cardanoTx (TxId 0) 2
@@ -92,10 +107,11 @@ performanceLimit nodeSpecs = (minConfTime, maxTPS)
     reqMsgSize = size $ SigReqTx sampleTx
     ackMsgSize = size $ SigAckTx (mtxRef sampleTx) sampleSig
     sampleSig = unComp (ms_sig_tx (simpleMsig asigTime) (SKey 0) sampleTx)
-    asigTime = maximum (nodeASigTime <$> nodeSpecs)
+    asigTime@(signTime, aggregateTime, verifySigTime) = getMaxes (nodeASigTime <$> nodeSpecs)
+    getMaxes = foldl (\(a,b,c) (a',b',c') -> (max a a', max b b', max c c')) (0, 0, 0)
     validationTime = mtxValidationDelay sampleTx
     allNodes = fromIntegral $ length nodeSpecs
-    otherNodes = fromIntegral $ length nodeSpecs - 1
+    otherNodes = allNodes - 1
 
 perSecond :: DiffTime -> Double
 perSecond t = 1e12 / fromIntegral (diffTimeToPicoseconds t)
@@ -142,13 +158,13 @@ kBitsPerSecond :: Integer -> (Size -> DiffTime)
 kBitsPerSecond rate = \(Size bytes) -> (fromIntegral bytes) * (fromRational $ recip $ (1024 * toRational rate ) / 8)
 
 -- TODO: This needs to be checked!
-simpleMsig :: DiffTime -> MS MockTx
-simpleMsig t = MS {
-  ms_sig_tx = ms_sign_delayed t,
-  ms_asig_tx = ms_asig_delayed t,
-  ms_verify_tx = ms_verify_delayed t,
+simpleMsig :: (DiffTime, DiffTime, DiffTime) -> MS MockTx
+simpleMsig (t1, t2, t3) = MS {
+  ms_sig_tx = ms_sign_delayed t1,
+  ms_asig_tx = ms_asig_delayed t2,
+  ms_verify_tx = ms_verify_delayed t3,
 
-  ms_sig_sn = ms_sign_delayed t,
-  ms_asig_sn = ms_asig_delayed t,
-  ms_verify_sn = ms_verify_delayed t
+  ms_sig_sn = ms_sign_delayed t1,
+  ms_asig_sn = ms_asig_delayed t2,
+  ms_verify_sn = ms_verify_delayed t3
 }

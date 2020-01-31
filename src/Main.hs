@@ -1,3 +1,4 @@
+{-# LANGUAGE TupleSections #-}
 module Main where
 
 import Control.Monad (when, forM_)
@@ -21,7 +22,7 @@ data CLI = CLI {
   concurrency :: Natural,
   numberTxs :: Natural,
   snapStrategy :: SnapStrategy,
-  asigTime :: Double,
+  asigTime :: (Double, Double, Double),
   output :: FilePath,
   discardEdges :: Int,
   verbosity :: Natural
@@ -52,7 +53,8 @@ cli = CLI
                     <> value (SnapAfter 1)))
   <*> (option auto (long "aggregate-signature-time"
                     <> help "time (in seconds) for MSig operations (signing, aggregating, validating)"
-                    <> value 0.0005))
+                    <> value (0.0005, 0.0005, 0.0005)
+                    <> metavar "(T_SIGN, T_AGGREGATE, T_VERIFY)"))
   <*> (strOption (short 'o'
                    <> long "output"
                    <> help "Write output to CSV file"
@@ -79,7 +81,7 @@ main = do
                   nodeTxConcurrency = fromIntegral $ concurrency opts,
                   nodeTxNumber = fromIntegral $ numberTxs opts,
                   nodeSnapStrategy = snapStrategy opts,
-                  nodeASigTime = secondsToDiffTime $ asigTime opts
+                  nodeASigTime = secondsToDiffTimeTriplet $ asigTime opts
                  }
   when (verbosity opts > 0) $ print opts
   (txs, snaps) <- analyseRun (verbosity opts) (runNodes specs)
@@ -91,6 +93,9 @@ main = do
 
 secondsToDiffTime :: Double -> DiffTime
 secondsToDiffTime = picosecondsToDiffTime . round . (*1e12)
+
+secondsToDiffTimeTriplet :: (Double, Double, Double) -> (DiffTime, DiffTime, DiffTime)
+secondsToDiffTimeTriplet (a,b,c) = (secondsToDiffTime a, secondsToDiffTime b, secondsToDiffTime c)
 
 writeCSV :: CLI -> [NodeSpec] -> [TxConfirmed] -> [SnConfirmed] -> IO ()
 writeCSV opts specs txs snaps = do
