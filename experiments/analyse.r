@@ -26,11 +26,11 @@ plot_tps_bandwidth <- function(d, subtitle) {
 }
 
 plot_conftime_bandwidth <- function(d, subtitle) {
-  p <- ggplot(d, aes(x = bandwidth, y = 100*conftime, colour = group)) +
+  p <- ggplot(d, aes(x = bandwidth, y = conftime, colour = group)) +
     scale_x_log10(name = 'bandwidth [kb/s]'
                 , breaks = 10^(-1:10), minor_breaks = minor_breaks) +
-    scale_y_log10(name = 'transaction confirmation time [ms]'
-                , breaks = minor_breaks, minor_breaks = NULL) +
+    scale_y_log10(name = 'transaction confirmation time [s]'
+                , breaks = breaks, minor_breaks = minor_breaks) +
     geom_point(alpha = 0) +
     geom_point(data = subset(d, object=='tx')) +
     geom_line(data = subset(d, object=='tx-baseline'), aes(group = node)) +
