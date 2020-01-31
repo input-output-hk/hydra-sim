@@ -2,7 +2,7 @@ module HydraSim.HeadNode.Handler
   ( handleMessage
   ) where
 
-import           Control.Monad (void)
+import           Control.Monad (when, void)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import           HydraSim.DelayedComp
@@ -33,9 +33,11 @@ handleMessage conf _peer s (New tx)
 
 handleMessage conf peer s (SigReqTx tx)
   | isValid = DecApply
-    (do void validComp
+    -- we do not need to validate the transaction if the message is from us; in
+    -- that case, we just validated it.
+    (do when (peer /= hcNodeId conf) $ void validComp
         pure $ s {
-          hsTxsSig = Map.insert (txRef tx) (txObj (hsTxsConf s) peer tx) (hsTxsSig s),
+          hsTxsSig = Map.insert (txRef tx) (txObj (hsTxsSig s) peer tx) (hsTxsSig s),
           hsUTxOSig = hsUTxOSig s `txApplyValid` tx
           })
     (TPTxSig (txRef tx) (hcNodeId conf))
@@ -74,13 +76,17 @@ handleMessage conf _peer s (SigConfTx txref asig)
     ("Invalid aggregate signature " ++ show asig ++ ", " ++ show avk ++ " in SigConfTx")
   | otherwise = DecApply
     (do
-        _ <- validComp -- this is only to wait, we already guarded against the
-                       -- signature being invalid
+        void validComp
+        -- this is only to wait, we already guarded against the signature being
+        -- invalid. Note that here, even if the message is from us, we did not
+        -- yet check the aggregate signature, so we do have to perform the check
+        -- now.
         let txsSig = Map.insert txref txob' (hsTxsSig s)
+            txsConf = Map.insert txref txob' (hsTxsConf s)
         pure $ s {
           hsUTxOConf = hsUTxOConf s `txApplyValid` txoTx txob,
           hsTxsSig = txsSig,
-          hsTxsConf = txsSig,
+          hsTxsConf = txsConf,
           hsTxsInflight = txref `Set.delete` hsTxsInflight s 
           })
     (TPTxConf txref)

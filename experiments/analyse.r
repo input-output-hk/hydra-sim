@@ -26,11 +26,11 @@ plot_tps_bandwidth <- function(d, subtitle) {
 }
 
 plot_conftime_bandwidth <- function(d, subtitle) {
-  p <- ggplot(d, aes(x = bandwidth, y = 100*conftime, colour = group)) +
+  p <- ggplot(d, aes(x = bandwidth, y = conftime, colour = group)) +
     scale_x_log10(name = 'bandwidth [kb/s]'
                 , breaks = 10^(-1:10), minor_breaks = minor_breaks) +
-    scale_y_log10(name = 'transaction confirmation time [ms]'
-                , breaks = minor_breaks, minor_breaks = NULL) +
+    scale_y_log10(name = 'transaction confirmation time [s]'
+                , breaks = breaks, minor_breaks = minor_breaks) +
     geom_point(alpha = 0) +
     geom_point(data = subset(d, object=='tx')) +
     geom_line(data = subset(d, object=='tx-baseline'), aes(group = node)) +
@@ -87,6 +87,11 @@ ggsave(filename = 'pdf/throughput-simple.pdf', width = 16, height = 9)
 plot_conftime_bandwidth(subset(data, regions == 'FrankfurtAWS-FrankfurtAWS-FrankfurtAWS'),
                         subtitle = 'Three nodes in same AWS region')
 ggsave(filename = 'pdf/conftime-simple-local.pdf', width = 16, height = 9)
+
+plot_conftime_bandwidth(subset(data, (regions == 'FrankfurtAWS-FrankfurtAWS-FrankfurtAWS') & (group %in% c('1', 'limit'))),
+                        subtitle = 'Three nodes in same AWS region') + facet_wrap(~ regions)
+ggsave(filename = 'pdf/conftime-simple-local-conc1.pdf', width = 16, height = 9)
+
 
 plot_conftime_bandwidth(subset(data, regions == 'IrelandAWS-FrankfurtAWS-LondonAWS'),
                    subtitle = 'Three nodes in Europe (Ireland, Frankfurt, London)')
@@ -152,5 +157,3 @@ plot_conc(concdata,
           rescale = 100) +
   facet_wrap(~ regions)
 ggsave(filename = 'pdf/tradeoff-simple.pdf', width = 16, height = 9)
-
-

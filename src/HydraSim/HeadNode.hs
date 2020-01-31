@@ -99,14 +99,16 @@ startNode
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 startNode tracer hn = void $
-  concurrently (labelThisThread >> listener tracer hn) $
+  concurrently (labelThisThread nodeLabel >> listener tracer hn) $
   concurrently (startMultiplexer mpTracer (hnMultiplexer hn)) $
-  concurrently (labelThisThread >> txSender tracer hn)
-               (labelThisThread >> snDaemon tracer hn)
+  concurrently (labelThisThread nodeLabel >> txSender tracer hn)
+               (labelThisThread nodeLabel >> snDaemon tracer hn)
   where
     mpTracer = contramap HydraMessage tracer
     nodeLabel = (show . hcNodeId . hnConf $ hn)
-    labelThisThread = do
+
+labelThisThread :: MonadAsync m => String -> m ()
+labelThisThread nodeLabel = do
       myId <- myThreadId
       labelThread myId nodeLabel
 
@@ -164,11 +166,13 @@ listener tracer hn = forever $ do
           atomically $ putTMVar (hnState hn) state'
           traceWith hydraDebugTracer (" state' = " ++ show state')
           traceWith protocolTracer trace
-          -- TODO: We _could_ think of adding some parallelism here, by doing
-          -- this asynchronously. That would slightly violate the assumption
-          -- that there is only one event being processed at any time, but since
-          -- the state is locked in a 'TMVar', that should be fine.
-          runComp ms' >>= sendMessage
+          -- We refine the protocol specification, in spawning a new thread for
+          -- computing and sending follow-up messages. Since we not acdo cess
+          -- the local state there, this is safe to do, and an obvious
+          -- performance optimisation.
+          void . async $ do
+            labelThisThread $ show thisId
+            runComp ms' >>= sendMessage
         DecWait comp -> do
           runComp comp
           atomically $ putTMVar (hnState hn) state
@@ -221,7 +225,7 @@ snDaemon
   -> HeadNode m tx -> m ()
 snDaemon tracer hn = case hcSnapshotStrategy conf of
   NoSnapshots -> return ()
-  SnapAfterNTxs n ->
+  SnapAfter n ->
     let
       waitForOurTurn :: SnapN -> STM m SnapN
       waitForOurTurn lastSn = do
