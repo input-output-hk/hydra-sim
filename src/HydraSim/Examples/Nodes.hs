@@ -76,7 +76,7 @@ performanceLimit nodeSpecs = (minConfTime, maxTPS)
     throughputBound = minimum
                       [  perSecond (((cap reqMsgSize) + otherNodes * (cap ackMsgSize)) / allNodes)
                       | cap <- capacities ]
-    cpuBound = perSecond (((validationTime + 3*asigTime) + otherNodes * (validationTime + 2*asigTime))/allNodes)
+    cpuBound = perSecond $ validationTime + asigTime
     roundTrips = [ (y, 2 * maximum
                    [ getSOrError x y
                    | x <- nodeRegion <$> nodeSpecs
