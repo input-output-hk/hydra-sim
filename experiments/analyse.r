@@ -10,24 +10,30 @@ oranges = brewer.pal(n = 7, "Oranges")[3:7]
 breaks <- 10^(-10:10)
 minor_breaks <- rep(1:9, 21)*(10^rep(-10:10, each=9))
 
+baseline1 <- 'Hydra Unlimited'
+baseline2 <- 'Full Trust'
+
 plot_tps_bandwidth <- function(d, subtitle) {
-  p <- ggplot(d, aes(x = bandwidth, y = tps, colour = group)) +
-    scale_x_log10(name = 'bandwidth [kb/s]'
-                , breaks = 10^(-1:10), minor_breaks = minor_breaks) +
-    scale_y_log10(name = 'transaction throughput [transactions/s]'
-                , breaks = minor_breaks, minor_breaks = NULL) 
+  p <- ggplot(d, aes(x = bandwidth, y = tps, colour = group))
   p +
+    scale_x_log10(name = 'bandwidth [kbits/s]'
+                , breaks = breaks, minor_breaks = minor_breaks) +
+    scale_y_log10(name = 'transaction throughput [transactions/s]'
+                , breaks = breaks, minor_breaks = minor_breaks) +
     geom_point(alpha = 0) +
     geom_point(data = subset(d, object=='tx')) +
-    geom_line(data = subset(d, object=='tx-baseline')) +
     ggtitle('Transaction Throughput',
             sub = subtitle) +
-    scale_colour_manual('Concurrency per Node', values = blues)
+    geom_line(data = subset(d, object=='tx-baseline'), aes(linetype=baseline1)) +
+    geom_line(data = subset(d, object=='tx-baseline2'), aes(colour = group, linetype=baseline2)) +
+    scale_colour_manual('Concurrency per Node', values = blues) +
+    scale_linetype_manual('Baseline Scenario', values = c('dashed', 'solid')) +
+    theme(legend.position = 'bottom')
 }
 
 plot_conftime_bandwidth <- function(d, subtitle) {
   p <- ggplot(d, aes(x = bandwidth, y = conftime, colour = group)) +
-    scale_x_log10(name = 'bandwidth [kb/s]'
+    scale_x_log10(name = 'bandwidth [kbits/s]'
                 , breaks = 10^(-1:10), minor_breaks = minor_breaks) +
     scale_y_log10(name = 'transaction confirmation time [s]'
                 , breaks = breaks, minor_breaks = minor_breaks) +
@@ -63,8 +69,8 @@ plot_conc <- function(d, subtitle, rescale) {
 
 
 data <- read.csv('csv/bandwidth-simple.csv')
-data$group <- factor(ifelse(data$object=='tx-baseline', 'limit', data$conc),
-                     levels = c('1', '2', '10', '20', 'limit'))
+data$group <- factor(ifelse(data$object=='tx-baseline', baseline1, data$conc),
+                     levels = c('1', '2', '10', '20', baseline1))
 
 plot_tps_bandwidth(subset(data, regions == 'FrankfurtAWS-FrankfurtAWS-FrankfurtAWS'),
                    subtitle = 'Three nodes in same AWS region')
@@ -107,8 +113,8 @@ ggsave(filename = 'pdf/conftime-simple-global.pdf', width = 16, height = 9)
 
 
 plutusdata <- read.csv('csv/bandwidth-plutus.csv')
-plutusdata$group <- factor(ifelse(plutusdata$object=='tx-baseline', 'limit', plutusdata$conc),
-                     levels = c('1', '2', '10', '20', 'limit'))
+plutusdata$group <- factor(ifelse(plutusdata$object=='tx-baseline', baseline1, plutusdata$conc),
+                     levels = c('1', '2', '10', '20', baseline1))
 
 plot_tps_bandwidth(subset(plutusdata, regions == 'FrankfurtAWS-FrankfurtAWS-FrankfurtAWS'),
                    subtitle = 'Three nodes in same AWS region -- Plutus Transactions')
@@ -144,16 +150,16 @@ ggsave(filename = 'pdf/conftime-plutus-global.pdf', width = 16, height = 9)
 
 
 concdata <- read.csv('csv/conc-simple.csv')
-concdata$group <- factor(ifelse(concdata$object=='tx-baseline', 'limit', concdata$conc),
-                         levels = c('1', '2', '5', '10', '20', '40', 'limit'))
+concdata$group <- factor(ifelse(concdata$object=='tx-baseline', baseline1, concdata$conc),
+                         levels = c('1', '2', '5', '10', '20', '40', baseline1))
 
 plot_conc(subset(concdata, regions == 'FrankfurtAWS-FrankfurtAWS-FrankfurtAWS'),
           subtitle = 'Three nodes in same AWS region',
-          rescale = 100)
+          rescale = 2000)
 ggsave(filename = 'pdf/tradeoff-simple-local.pdf', width = 16, height = 9)
 
 plot_conc(concdata,
           subtitle = 'Comparison of geographic distribution of nodes',
-          rescale = 100) +
+          rescale = 500) +
   facet_wrap(~ regions)
 ggsave(filename = 'pdf/tradeoff-simple.pdf', width = 16, height = 9)

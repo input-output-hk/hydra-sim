@@ -3,6 +3,7 @@ mkdir -p csv pdf
 
 export locations=('FrankfurtAWS FrankfurtAWS FrankfurtAWS' 'IrelandAWS FrankfurtAWS LondonAWS' 'OregonAWS FrankfurtAWS TokyoAWS')
 export n=1000
+# export n=100
 
 for loc in "${locations[@]}"; do
     echo $loc
