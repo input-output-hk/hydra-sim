@@ -115,7 +115,8 @@ analyseRun verbosity run = do
     putStrLn $ "Processed " ++ show totalTxs ++ " transactions."
     putStrLn $ "Made " ++ show totalSnaps ++ " snapshots."
     putStrLn $ "Transaction throughput (tx per second): " ++ show (tps confTxs)
-    putStrLn $ "Average tx confirmation time: " ++ show (avgConfTime confTxs )
+    putStrLn $ "Average tx confirmation time: " ++ show (avgConfTime confTxs)
+    putStrLn $ "Average snapshot size: " ++ show (avgSnapSize confSnaps)
   return (confTxs, confSnaps)
   where
     warn s = setSGR [SetColor Foreground Vivid Red] >> putStrLn s >> setSGR [Reset]
@@ -161,6 +162,17 @@ avgConfTime txs0 =
     getConfTime (TxConfirmed _ _ dt) = dt
     getConfTime (TxUnconfirmed _ _) = error "Unconfirmed tx in avgConfTime"
     txs = filterConfirmedTxs txs0
+
+avgSnapSize :: [SnConfirmed] -> Double
+avgSnapSize sns0 =
+  (sum . map getSnapSize $ sns) / fromIntegral (length sns)
+  where
+    getSnapSize (SnConfirmed _ n _ _) = fromIntegral n
+    getSnapSize (SnUnconfirmed _ _ _) = error "Unconfirmed snapshot in avgSnapSize"
+    sns = filterConfirmedSnaps sns0
+    filterConfirmedSnaps = filter (\snap -> case snap of
+                                     SnConfirmed _ _ _ _ -> True
+                                     SnUnconfirmed _ _ _ -> False)
 
 filterConfirmedTxs :: [TxConfirmed] -> [TxConfirmed]
 filterConfirmedTxs =
