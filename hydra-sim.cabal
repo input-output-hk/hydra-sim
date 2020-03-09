@@ -49,4 +49,4 @@ executable hydra-sim
                      , time >= 1.8.0.2
   -- hs-source-dirs:
   default-language:    Haskell2010
-  ghc-options:         -Wall
+  ghc-options:         -Wall -O2

@@ -76,8 +76,8 @@ data NodeSpec = NodeSpec {
 --   rate a node can process.
 --
 -- Whichever limit is lower determines the maximal throughput we could achieve.
-performanceLimit :: [NodeSpec] -> ([(AWSCenters, DiffTime)], Double)
-performanceLimit nodeSpecs = (minConfTime, maxTPS)
+performanceLimit :: [NodeSpec] -> ([(AWSCenters, DiffTime)], Double, Double)
+performanceLimit nodeSpecs = (minConfTime, maxTPS, maxTPS')
   where
     minConfTime = [ (region, sum [
                         validationTime, -- at the issuer
@@ -95,6 +95,13 @@ performanceLimit nodeSpecs = (minConfTime, maxTPS)
                       [ (perSecond (otherNodes * (cap (ackMsgSize + reqMsgSize)) / allNodes))
                       | cap <- capacities ]
     cpuBound = perSecond $ validationTime + verifySigTime
+    maxTPS' = minimum [throughputBound', cpuBound', latencyBound]
+    throughputBound' = minimum
+                      [ (perSecond (otherNodes * (cap (ackMsgSize' + reqMsgSize)) / allNodes))
+                      | cap <- capacities ]
+    cpuBound' = perSecond $ validationTime
+    latencyBound = perSecond ((maximum . map snd $ networkDelays)*2/(conc * allNodes))
+    conc = fromIntegral $ maximum $ nodeTxConcurrency <$> nodeSpecs
     networkDelays = [ (y, maximum
                         [ getSOrError x y
                         | x <- nodeRegion <$> nodeSpecs
@@ -106,6 +113,7 @@ performanceLimit nodeSpecs = (minConfTime, maxTPS)
        Plutus -> plutusTx (TxId 0)
     reqMsgSize = size $ SigReqTx sampleTx
     ackMsgSize = size $ SigAckTx (mtxRef sampleTx) sampleSig
+    ackMsgSize' = size (NewSn :: HeadProtocol MockTx) + size (TxId 0) -- message containing only tx id
     sampleSig = unComp (ms_sig_tx (simpleMsig asigTime) (SKey 0) sampleTx)
     asigTime@(signTime, aggregateTime, verifySigTime) = getMaxes (nodeASigTime <$> nodeSpecs)
     getMaxes = foldl (\(a,b,c) (a',b',c') -> (max a a', max b b', max c c')) (0, 0, 0)

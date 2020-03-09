@@ -87,9 +87,17 @@ main = do
   (txs, snaps) <- analyseRun (verbosity opts) (runNodes specs)
   writeCSV opts specs txs snaps
   when (verbosity opts > 0) $ do
-    let (minConfTime, maxTPS) = performanceLimit specs
+    let (minConfTime, maxTPS, maxTPS') = performanceLimit specs
     putStrLn $ concat ["Minimal confirmation time: ", show $ minConfTime]
-    putStrLn $ concat ["Maximal throughput: ", show $ maxTPS]
+    putStrLn $ concat ["Maximal throughput (Hydra Unlimited): ",
+                       show $ maxTPS,
+                       percent (tps txs) maxTPS]
+    putStrLn $ concat ["Maximal throughput (Full Trust): ",
+                       show $ maxTPS',
+                       percent (tps txs) maxTPS']
+  where
+    percent :: Double -> Double -> String
+    percent x y = concat [" (", show $ x/y * 100, "%)"]
 
 secondsToDiffTime :: Double -> DiffTime
 secondsToDiffTime = picosecondsToDiffTime . round . (*1e12)
@@ -100,23 +108,27 @@ secondsToDiffTimeTriplet (a,b,c) = (secondsToDiffTime a, secondsToDiffTime b, se
 writeCSV :: CLI -> [NodeSpec] -> [TxConfirmed] -> [SnConfirmed] -> IO ()
 writeCSV opts specs txs snaps = do
   let fp = output opts
+      nNodes = length specs
   doesExist <- doesFileExist fp
   let mode = if doesExist then AppendMode else WriteMode
   withFile fp mode $ \h -> do
-        when (not doesExist) (hPutStrLn h "t,object,conftime,bandwidth,txtype,conc,regions,node,tps")
+        when (not doesExist) (hPutStrLn h "t,object,conftime,bandwidth,txtype,conc,regions,node,tps,snapsize,clustersize")
         let tpsInRun = tps txs
         forM_ (drop (discardEdges opts) . reverse . drop (discardEdges opts) $ txs) $ \tx -> case tx of
           TxConfirmed node t dt -> hPutStrLn h $ intercalate ","
-            [showt (timeToDiffTime t), "tx", showt dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, node, show tpsInRun]
+            [showt (timeToDiffTime t), "tx", showt dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, node, show tpsInRun, "NA", show nNodes]
           TxUnconfirmed _ _ -> return ()
         forM_ snaps $ \snap -> case snap of
-          SnConfirmed node _size t dt -> hPutStrLn h $ intercalate ","
-            [showt (timeToDiffTime t), "snap", showt dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, node, show tpsInRun]
+          SnConfirmed node size t dt -> hPutStrLn h $ intercalate ","
+            [showt (timeToDiffTime t), "snap", showt dt, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, node, show tpsInRun, show size, show nNodes]
           SnUnconfirmed _ _ _ -> return ()
-        let (minConfTimes, maxTPS) = performanceLimit specs
-        forM_ minConfTimes $ \(region, minConfTime) ->
+        let (minConfTimes, maxTPS, maxTPS') = performanceLimit specs
+        forM_ minConfTimes $ \(region, minConfTime) -> do
           hPutStrLn h $ intercalate ","
-          [showt 0, "tx-baseline", showt minConfTime, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, show region, show $ maxTPS]
+            [showt 0, "tx-baseline", showt minConfTime, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, show region, show $ maxTPS, "NA", show nNodes]
+          hPutStrLn h $ intercalate ","
+            [showt 0, "tx-baseline2", showt minConfTime, show $ networkCapacity opts, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, show region, show $ maxTPS', "NA", show nNodes]
+
 showt :: DiffTime -> String
 showt = show . diffTimeToSeconds
 
