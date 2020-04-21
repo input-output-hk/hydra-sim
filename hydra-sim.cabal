@@ -21,6 +21,7 @@ executable hydra-sim
   other-modules:       HydraSim.Analyse
                      , HydraSim.Channel
                      , HydraSim.DelayedComp
+                     , HydraSim.Examples.Baselines
                      , HydraSim.Examples.Channels
                      , HydraSim.Examples.Nodes
                      , HydraSim.Examples.Txs
