@@ -22,6 +22,7 @@ import HydraSim.Tx.Mock
 import HydraSim.Types
 import HydraSim.Sized
 import HydraSim.MSig.Mock
+import qualified Data.Set as Set
 
 data Scenario = FullTrust | HydraUnlimited deriving (Eq, Show, Read)
 data Concurrency = FiniteConc Int | UnlimitedConc deriving (Eq, Show, Read)
@@ -70,7 +71,7 @@ baselineTPS bl = TPSBound cpuBound bandwidthBound mlatencyBound
         perSecond $ validationTime bl
       HydraUnlimited ->
         perSecond $ validationTime bl + verifySigTime
-    bandwidthBound = (perSecond (otherNodes * (capacity bl (ackMsgSize bl + reqMsgSize bl)) / allNodes))
+    bandwidthBound = (perSecond (otherNodes * (capacity bl (ackTxSize bl + reqTxSize bl + confTxSize bl)) / allNodes))
     mlatencyBound = case blConc bl of
       UnlimitedConc -> Nothing
       FiniteConc conc -> Just $
@@ -125,18 +126,24 @@ minConfTime bl =
 capacity :: Baseline -> (Size -> DiffTime)
 capacity bl = kBitsPerSecond $ blBandwidth bl
 
-ackMsgSize :: Baseline -> Size
-ackMsgSize bl = case blScenario bl of
+ackTxSize :: Baseline -> Size
+ackTxSize bl = case blScenario bl of
   FullTrust ->
       size (NewSn :: HeadProtocol MockTx) + size (TxId 0)
   HydraUnlimited ->
       size $ SigAckTx (mtxRef $ sampleTx bl) (sampleSig bl)
 
-reqMsgSize :: Baseline -> Size
-reqMsgSize bl = size $ SigReqTx (sampleTx bl)
+reqTxSize :: Baseline -> Size
+reqTxSize bl = size $ SigReqTx (sampleTx bl)
+
+confTxSize :: Baseline -> Size
+confTxSize bl = size $ SigConfTx (TxId 0) (sampleASig bl)
 
 sampleSig :: Baseline -> Sig
 sampleSig bl = unComp (ms_sig_tx (simpleMsig $ blAsigTimes bl) (SKey 0) (sampleTx bl))
+
+sampleASig :: Baseline -> ASig
+sampleASig bl = unComp (ms_asig_tx (simpleMsig $ blAsigTimes bl) (sampleTx bl) Set.empty Set.empty)
 
 validationTime :: Baseline -> DiffTime
 validationTime bl = mtxValidationDelay $ sampleTx bl
