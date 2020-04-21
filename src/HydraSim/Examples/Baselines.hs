@@ -16,7 +16,7 @@ where
 import HydraSim.Examples.Nodes
 import HydraSim.Examples.Txs
 import HydraSim.DelayedComp (unComp)
-import Data.Time.Clock (DiffTime)
+import Data.Time.Clock (DiffTime, diffTimeToPicoseconds)
 import HydraSim.Examples.Channels
 import HydraSim.Tx.Mock
 import HydraSim.Types
@@ -50,6 +50,7 @@ tpsConstantBound (TPSBound cpu _bandwidth (Just latency)) = min cpu latency
 data Baseline = Baseline {
   blScenario :: Scenario,
   blConc :: Concurrency,
+  -- | network capacity, in kbits/s
   blBandwidth :: Bandwidth,
   blLocations :: [AWSCenters],
   blAsigTimes :: (DiffTime, DiffTime, DiffTime),
@@ -152,7 +153,5 @@ networkDelays bl = [ (y, maximum
                        ])
                    | y <- blLocations bl]
 
-
-
--- perSecond :: DiffTime -> Double
--- perSecond t = 1e12 / fromIntegral (diffTimeToPicoseconds t)
+perSecond :: DiffTime -> Double
+perSecond t = 1e12 / fromIntegral (diffTimeToPicoseconds t)
