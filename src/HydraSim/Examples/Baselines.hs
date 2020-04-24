@@ -16,7 +16,7 @@ where
 import HydraSim.Examples.Nodes
 import HydraSim.Examples.Txs
 import HydraSim.DelayedComp (unComp)
-import Data.Time.Clock (DiffTime, diffTimeToPicoseconds)
+import Data.Time.Clock (DiffTime, diffTimeToPicoseconds, picosecondsToDiffTime)
 import HydraSim.Examples.Channels
 import HydraSim.Tx.Mock
 import HydraSim.Types
@@ -26,7 +26,6 @@ import qualified Data.Set as Set
 
 data Scenario = FullTrust | HydraUnlimited deriving (Eq, Show, Read)
 data Concurrency = FiniteConc Int | UnlimitedConc deriving (Eq, Show, Read)
-
 type Bandwidth = Integer
 
 -- | Type representing bounds on the transaction rate from different constraints.
@@ -55,6 +54,13 @@ data Baseline = Baseline {
   blBandwidth :: Bandwidth,
   blLocations :: [AWSCenters],
   blAsigTimes :: (DiffTime, DiffTime, DiffTime),
+  -- | We can also handle snapshots in baselines.
+  --
+  -- Note, however, that @SnapAfter n@ in a baseline is interpreted so that
+  -- there will be a snapshot after every @n@ transactions. In general, this
+  -- will be more than in a real run. In a run, a node will produce a snapshot
+  -- once it has at least @n@ confirmed transactions, and is the current leader.
+  blSnapshots :: SnapStrategy,
   blTxType :: Txs
   }
 
@@ -70,12 +76,16 @@ baselineTPS bl = TPSBound cpuBound bandwidthBound mlatencyBound
       FullTrust ->
         perSecond $ validationTime bl
       HydraUnlimited ->
-        perSecond $ validationTime bl + verifySigTime
-    bandwidthBound = (perSecond (otherNodes * (capacity bl (ackTxSize bl + reqTxSize bl + confTxSize bl)) / allNodes))
+        perSecond $ validationTime bl + verifySigTime `multiplyDiffTime` (1 + snapFactor)
+    bandwidthBound = perSecond $ otherNodes/allNodes * (
+      (capacity bl (txMsgSize bl)) + ((capacity bl (snMsgSize bl)) `multiplyDiffTime` snapFactor))
     mlatencyBound = case blConc bl of
       UnlimitedConc -> Nothing
       FiniteConc conc -> Just $
         perSecond ((maximum . map snd $ networkDelays bl)*2/(fromIntegral conc * allNodes))
+    snapFactor = case blSnapshots bl of
+      NoSnapshots -> 0
+      SnapAfter n -> 1 / (fromIntegral n :: Double)
 
 -- | Evaluate TPS bound at suitable supporting points, to plot TPS over bandwidth.
 --
@@ -109,11 +119,11 @@ minConfTime :: Baseline -> [(AWSCenters, DiffTime)]
 minConfTime bl =
   [ (region, sum [
         validationTime bl, -- at the issuer
-        capacity bl $ reqMsgSize bl,
+        capacity bl $ reqTxSize bl,
         networkDelay,
         validationTime bl, -- at each other node (in parallel)
         signTime,
-        capacity bl $ ackMsgSize bl,
+        capacity bl $ ackTxSize bl,
         networkDelay,
         aggregateTime,
         verifySigTime])
@@ -132,6 +142,22 @@ ackTxSize bl = case blScenario bl of
       size (NewSn :: HeadProtocol MockTx) + size (TxId 0)
   HydraUnlimited ->
       size $ SigAckTx (mtxRef $ sampleTx bl) (sampleSig bl)
+
+txMsgSize :: Baseline -> Size
+txMsgSize bl = sum [
+    reqTxSize bl,
+    ackTxSize bl,
+    confTxSize bl
+  ]
+
+snMsgSize :: Baseline -> Size
+snMsgSize bl = case (blScenario bl, blSnapshots bl) of
+  (HydraUnlimited, SnapAfter n) -> sum . map size $ [
+    SigReqSn noSnapN (Set.fromList [TxId i | i <- [0..n-1]]),
+    SigAckSn noSnapN (sampleSig bl),
+    SigConfSn noSnapN (sampleASig bl)
+    ]
+  _ -> 0
 
 reqTxSize :: Baseline -> Size
 reqTxSize bl = size $ SigReqTx (sampleTx bl)
@@ -162,3 +188,7 @@ networkDelays bl = [ (y, maximum
 
 perSecond :: DiffTime -> Double
 perSecond t = 1e12 / fromIntegral (diffTimeToPicoseconds t)
+
+multiplyDiffTime :: DiffTime -> Double -> DiffTime
+multiplyDiffTime t x = picosecondsToDiffTime . round $
+  x * fromIntegral (diffTimeToPicoseconds t)

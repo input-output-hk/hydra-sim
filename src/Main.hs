@@ -23,6 +23,7 @@ data CLI = CLI {
   concurrency :: Natural,
   numberTxs :: Natural,
   snapStrategy :: SnapStrategy,
+  baselineSnapshots :: [SnapStrategy],
   asigTime :: (Double, Double, Double),
   output :: FilePath,
   discardEdges :: Int,
@@ -52,6 +53,10 @@ cli = CLI
                     <> help "Sets the strategy for when to create snapshots"
                     <> metavar "NoSnapshots | SnapAfter N"
                     <> value (SnapAfter 1)))
+  <*> (option auto (long "baseline-snapshots"
+                    <> help "Sets the strategy for when to create snapshots"
+                    <> metavar "NoSnapshots | SnapAfter N"
+                    <> value [NoSnapshots]))
   <*> (option auto (long "aggregate-signature-time"
                     <> help "time (in seconds) for MSig operations (signing, aggregating, validating)"
                     <> value (0.00015, 0.000010, 0.00085)
@@ -88,20 +93,31 @@ main = do
           blBandwidth = fromIntegral $ minimum (networkCapacity opts),
           blLocations = regions opts,
           blAsigTimes = secondsToDiffTimeTriplet $ asigTime opts,
+          blSnapshots = NoSnapshots,
           blTxType = txType opts
           }
-        baselines = [
-          ("full-trust", baseline FullTrust),
-          ("full-trust-infinte-conc", (baseline FullTrust) {blConc = UnlimitedConc}),
-          ("hydra-unlimited", baseline HydraUnlimited),
-          ("hydra-unlimited-infinte-conc", (baseline HydraUnlimited) {blConc = UnlimitedConc})
+        baselines = concat [
+          [("full-trust", (baseline FullTrust) {blSnapshots = NoSnapshots})],
+          [("full-trust-infinte-conc", (baseline FullTrust) {blConc = UnlimitedConc})],
+          [("hydra-unlimited",
+            (baseline HydraUnlimited) {blSnapshots = snap})
+          | snap <- baselineSnapshots opts ],
+          [("hydra-unlimited-infinte-conc",
+            (baseline HydraUnlimited) {blConc = UnlimitedConc,
+                                       blSnapshots = snap})
+          | snap <- baselineSnapshots opts ]
           ]
+        snapsize bl = case blSnapshots bl of
+          NoSnapshots -> "infinite"
+          SnapAfter n -> show n
     forM_ baselines $ \(scenario, bl) -> do
       let tpsBound = findIntersection bl (fromIntegral $ minimum (networkCapacity opts),
                                           fromIntegral $ maximum (networkCapacity opts))
       forM_ tpsBound $ \(capacity, bound) ->
         hPutStrLn h $ intercalate ","
-          [showt 0, scenario, "NA", show $ capacity, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, "NA", show (tpsTotalBound bound), "na", show (length $ regions opts)]
+          [showt 0, scenario, "NA", show $ capacity, show $ txType opts,
+           show $ concurrency opts, showCenterList $ regions opts, "NA",
+           show (tpsTotalBound bound), snapsize bl, show (length $ regions opts)]
 
 
 
