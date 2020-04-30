@@ -1,42 +1,40 @@
 ## This file produces the plots for the hydra paper.
 library(ggplot2)
-library(RColorBrewer)
 library(dplyr)
 library(forcats)
 
-theme_set(theme_bw())
+theme_set(theme_light())
 
-blues = brewer.pal(n = 7, "Blues")[3:7]
-oranges = brewer.pal(n = 7, "Oranges")[3:7]
-
-breaks <- 10^(-10:10)
-minor_breaks <- rep(1:9, 21)*(10^rep(-10:10, each=9))
-
-baseline1 <- 'Hydra Unlimited'
-baseline2 <- 'Full Trust'
-
-plot_tps_bandwidth <- function(d, subtitle) {
-  p <- ggplot(d, aes(x = bandwidth, y = tps, colour = group## , shape = group
-                     ))
-  p +
-    scale_x_log10(name = 'bandwidth [kbits/s]'
-                , breaks = breaks, minor_breaks = minor_breaks) +
-    scale_y_log10(name = 'transaction throughput [tx/s]'
-                , breaks = breaks, minor_breaks = minor_breaks) +
-    geom_point(alpha = 0) +
-    geom_point(data = subset(d, object=='tx'), aes(shape = group), size = 3) +
-    geom_line(data = subset(d, object=='tx-baseline'), aes(linetype=baseline1), colour = 'black') +
-    geom_line(data = subset(d, object=='tx-baseline2'), aes(colour = group, linetype=baseline2)) +
-    scale_colour_manual('Concurrency per Node', values = blues[1:4], limits = c('1', '2', '10', '20')) +
-    scale_shape_discrete('Concurrency per Node') +
-    scale_linetype_manual('Baseline Scenario', values = c('solid', 'dashed')) +
-    theme(legend.position = 'bottom', legend.box = 'vertical')+
-    theme(text = element_text(size=28)) +
-    guides(color = guide_legend(override.aes = list(linetype = 0)))
-}
 
 readData <- function(fp) {
-  data <- read.csv(fp) %>%
+  renameNodes <- function(d) {
+    local <- d %>% filter(regions == 'Local') %>%
+      mutate(node = fct_recode(
+               node, 'Frankfurt' = 'NodeId 0',
+               'Frankfurt' = 'NodeId 1',
+               'Frankfurt' = 'NodeId 2',
+               'Frankfurt' = 'FrankfurtAWS'))
+    continental <- d %>% filter(regions == 'Continental') %>%
+      mutate(node = fct_recode(
+               node,
+               'Frankfurt/Ireland' = 'FrankfurtAWS',
+               'Frankfurt/Ireland' = 'IrelandAWS',
+               'London' = 'LondonAWS',
+               'Frankfurt/Ireland' = 'NodeId 0',
+               'Frankfurt/Ireland' = 'NodeId 1',
+               'London' = 'NodeId 2'))
+    global <- d %>% filter(regions == 'Global') %>%
+      mutate(node = fct_recode(
+               node,
+               'Oregon' = 'NodeId 0',
+               'Frankfurt/Tokyo' = 'NodeId 1',
+               'Frankfurt/Tokyo' = 'NodeId 2',
+               'Oregon' = 'OregonAWS',
+               'Frankfurt/Tokyo' = 'FrankfurtAWS',
+               'Frankfurt/Tokyo' = 'TokyoAWS'))
+    bind_rows(local, continental, global)
+  }
+  d <- read.csv(fp) %>%
     mutate(regions = fct_recode(
              regions,
              'Local' = 'FrankfurtAWS-FrankfurtAWS-FrankfurtAWS',
@@ -48,89 +46,152 @@ readData <- function(fp) {
              'Concurrency 2' = '2',
              'Concurrency 10' = '10',
              'Concurrency 20' = '20'))
-  data$group <- factor(ifelse(data$object=='tx-baseline', baseline1, data$conc),
-                       levels = c('1', '2', '10', '20', baseline1))
-  data
+  renameNodes(d)
 }
 
-dataBWSimple <- readData('csv/bandwidth-simple.csv')
-plot_tps_bandwidth(subset(dataBWSimple, regions %in% c('Local', 'Continental', 'Global')),
-                   subtitle = 'Comparison of geographic distribution of nodes') +
-  facet_wrap(~ regions)
-ggsave(filename = 'throughput-simple.png', width = 16, height = 9)
+breaks <- 10^(-10:10)
+minor_breaks <- rep(1:9, 21)*(10^rep(-10:10, each=9))
+baseline_hu_inf <- function(d) {
+  geom_line(data = subset(d, object=='hydra-unlimited-infinte-conc-tps'),
+            aes(colour = 'Hydra Unlimited', linetype=snapsize))
+}
+baseline_hu <- function(d) {
+  geom_line(data = subset(d, object=='hydra-unlimited-tps'),
+            aes(colour = 'Hydra Unlimited', linetype=snapsize))
+}
 
+baseline_ft_inf <- function(d) {
+  geom_line(data = subset(d, object=='full-trust-infinte-conc-tps'),
+            aes(colour = 'Universal'))
+}
+baseline_ft <- function(d) {
+  geom_line(data = subset(d, object=='full-trust-tps'),
+            aes(colour = 'Universal'))
+}
+points <- function(d) {
+  geom_point(data = subset(d, object=='tps'))
+}
 
-plot_tps_bandwidthMBitS <- function(d, subtitle) {
-  p <- ggplot(d, aes(x = bandwidth/1024, y = tps, colour = group))
-  p +
-    scale_x_log10(name = 'bandwidth [Mbits/s]'
+linescale <- scale_linetype_manual('Snapshot size', limits = c('1', '2', '5', '10', 'infinite'), values = c('dotted', 'dashed', 'dotdash', 'longdash', 'solid'))
+
+themeSettings <- theme(legend.position = 'bottom',
+                       legend.box = 'vertical',
+                       text = element_text(size=24))
+
+tpsPlot <- function(d) {
+  ggplot(d, aes(x = bandwidth/1024, y = value)) +
+    scale_x_log10(name = 'bandwidth [Mbit/s]'
                 , breaks = breaks, minor_breaks = minor_breaks) +
     scale_y_log10(name = 'transaction throughput [tx/s]'
                 , breaks = breaks, minor_breaks = minor_breaks) +
-    geom_point(alpha = 0) +
-    geom_point(data = subset(d, object=='tx'), aes(shape = group), size = 3) +
-    geom_line(data = subset(d, object=='tx-baseline'), aes(linetype=baseline1), colour = 'black') +
-    geom_line(data = subset(d, object=='tx-baseline2'), aes(colour = group, linetype=baseline2)) +
-    scale_colour_manual('Concurrency per Node', values = blues[1:4], limits = c('1', '2', '10', '20')) +
-    scale_shape_discrete('Concurrency per Node') +
-    scale_linetype_manual('Baseline Scenario', values = c('solid', 'dashed')) +
-    theme(legend.position = 'bottom', legend.box = 'vertical')+
-    theme(text = element_text(size=28)) +
-    guides(color = guide_legend(override.aes = list(linetype = 0)))
+    scale_color_hue('Baseline')
 }
 
-dataBWPlutus <- readData('csv/bandwidth-plutus.csv')
-plot_tps_bandwidthMBitS(subset(dataBWPlutus, regions %in% c('Local', 'Continental', 'Global')),
-                   subtitle = 'Comparison of geographic distribution of nodes') +
-  facet_wrap(~ regions) +
-  coord_cartesian(xlim = c(4e-1, 2000))
-ggsave(filename = 'throughput-plutus.png', width = 16, height = 9)
 
 
+dSimple = readData('csv/simple.csv')
+dPlutus = readData('csv/plutus.csv')
 
-plot_conftime_bandwidth <- function(d) {
-  p <- ggplot(d, aes(x = bandwidth, y = conftime)) +
-    scale_x_log10(name = 'bandwidth [kbits/s]'
-                , breaks = 10^(-1:10), minor_breaks = minor_breaks) +
-    scale_y_continuous(name = 'transaction confirmation time [s]') +
-    geom_point(alpha = 0) +
-    geom_point(data = subset(d, object=='tx'), alpha = 0.1) +
-    geom_line(data = subset(d, object=='tx-baseline'), aes(group = node), linetype = 'dashed') +
-    scale_linetype_manual('Baseline', values = c('dashed')) +
-    facet_wrap(~ concLabel) +
-    theme(text = element_text(size=28)) +
-    theme(legend.position = 'bottom')
-  p
+
+## Comparison of the baselines, without latency
+tpsPlot(dSimple) +
+  baseline_ft_inf(dSimple) +
+  baseline_hu_inf(dSimple) +
+  linescale + themeSettings +
+  ggtitle('Universal and Hydra Unlimited Baselines',
+          subtitle = 'Simple Transactions, Zero Latency')
+ggsave('pdf/baselines-nolat-simple.pdf')
+
+tpsPlot(dPlutus) +
+  baseline_ft_inf(dPlutus) +
+  baseline_hu_inf(dPlutus) +
+  linescale + themeSettings +
+  ggtitle('Universal and Hydra Unlimited Baselines',
+          subtitle = 'Plutus Transactions, Zero Latency')
+ggsave('pdf/baselines-nolat-plutus.pdf')
+
+## Comparison of the baselines, including finite latency
+tpsPlot(dSimple) +
+  baseline_ft(dSimple) + baseline_hu(dSimple) +
+  linescale + themeSettings +
+  facet_grid(regions ~ concLabel) +
+  ggtitle('Universal and Hydra Unlimited Baselines',
+          subtitle = 'Simple Transactions')
+ggsave('pdf/baselines-simple.pdf')
+
+tpsPlot(dPlutus) +
+  baseline_ft(dPlutus) + baseline_hu(dPlutus) +
+  linescale + themeSettings +
+  facet_grid(regions ~ concLabel) +
+  ggtitle('Universal and Hydra Unlimited Baselines',
+          subtitle = 'Plutus Transactions')
+ggsave('pdf/baselines-plutus.pdf')
+
+## Experimental Evaluation
+tpsPlot(dSimple) +
+  baseline_ft(dSimple) + baseline_hu(dSimple) +
+  points(dSimple) +
+  linescale + themeSettings +
+  facet_grid(regions ~ concLabel) +
+  ggtitle('Experimental Evaluation',
+          subtitle = 'Simple Transactions')
+ggsave('pdf/tps-simple.pdf')
+
+tpsPlot(dPlutus) +
+  baseline_ft(dPlutus) + baseline_hu(dPlutus) +
+  points(dPlutus) +
+  linescale + themeSettings +
+  facet_grid(regions ~ concLabel) +
+  ggtitle('Experimental Evaluation',
+          subtitle = 'Plutus Transactions')
+ggsave('pdf/tps-plutus.pdf')
+
+
+dSimple2 <- renameNodes(dSimple)
+
+
+conftimePlot <- function(d) {
+ggplot(d, aes(x = bandwidth/1024, y = value)) +
+  geom_point(data = subset(d, object == 'conftime-tx'), aes(colour = node), alpha = 0.1) +
+  geom_line(data = subset(d, object == 'min-conftime'), aes(colour = node)) +
+  scale_x_log10(name = 'bandwidth [Mbits/s]'
+              , breaks = breaks, minor_breaks = minor_breaks) +
+  scale_y_log10(name = 'transaction confirmation time [s]',
+                breaks = 10^(-2:1), minor_breaks = rep(1:9, 4)*(10^rep(-2:1, each=9))) +
+  themeSettings +
+  scale_colour_hue('Node Location') +
+  guides(color = guide_legend(override.aes = list(linetype = 1, alpha = 1))) +
+  ggtitle('Transaction Confirmation Time')
 }
 
-plot_conftime_bandwidth(subset(dataBWSimple, regions == 'Local' & conftime < 1))
-ggsave(filename = 'conftime-simple-local.png', width = 16, height = 9)
+conftimePlot(dSimple %>% filter(regions == 'Local')) +
+  ggtitle(waiver(), subtitle = 'Simple Transactions, Local Cluster') +
+  facet_wrap(~ concLabel)
+ggsave('pdf/conftime-local-simple.pdf')
 
-plot_conftime_bandwidth_col <- function(d) {
-  p <- ggplot(d, aes(x = bandwidth/1024, y = conftime)) +
-    scale_x_log10(name = 'bandwidth [Mbits/s]'
-                , breaks = 10^(-1:10), minor_breaks = minor_breaks) +
-    scale_y_continuous(name = 'transaction confirmation time [s]') +
-    geom_point(alpha = 0) +
-    geom_point(data = subset(d, object=='tx'), alpha = 0.1, aes(colour = node), position = position_jitter(width = 0.01, height = 0)) +
-    geom_line(data = subset(d, object=='tx-baseline'), aes(group = node, colour = node), linetype = 'dashed') +
-    scale_color_discrete('Node Location') +
-    guides(color = guide_legend(override.aes = list(linetype = 'dashed', alpha = 1)))
-  p + facet_wrap(~ concLabel) +
-    theme(text = element_text(size=28)) +
-    theme(legend.position = 'bottom')
-}
+conftimePlot(dSimple %>% filter(regions == 'Continental')) +
+  ggtitle(waiver(), subtitle = 'Simple Transactions, Continental Cluster') +
+  facet_wrap(~ concLabel)
+ggsave('pdf/conftime-continental-simple.pdf')
 
-dataGlobalPlutus <- subset(dataBWPlutus, regions == 'Global') %>% 
-  mutate(node = fct_recode(
-           node,
-           'Oregon' = 'NodeId 0',
-           'Frankfurt/Tokyo' = 'NodeId 1',
-           'Frankfurt/Tokyo' = 'NodeId 2',
-           'Oregon' = 'OregonAWS',
-           'Frankfurt/Tokyo' = 'FrankfurtAWS',
-           'Frankfurt/Tokyo' = 'TokyoAWS'
-         ))
+conftimePlot(dSimple %>% filter(regions == 'Global')) +
+  ggtitle(waiver(), subtitle = 'Simple Transactions, Global Cluster') +
+  facet_wrap(~ concLabel)
+ggsave('pdf/conftime-global-simple.pdf')
 
-plot_conftime_bandwidth_col(subset(dataGlobalPlutus, conftime < 1)) + coord_cartesian(xlim = c(4e-1, 2000))
-ggsave(filename = 'conftime-plutus-global.png', width = 16, height = 9)
+
+
+conftimePlot(dPlutus %>% filter(regions == 'Local')) +
+  ggtitle(waiver(), subtitle = 'Plutus Transactions, Local Cluster') +
+  facet_wrap(~ concLabel)
+ggsave('pdf/conftime-local-plutus.pdf')
+
+conftimePlot(dPlutus %>% filter(regions == 'Continental')) +
+  ggtitle(waiver(), subtitle = 'Plutus Transactions, Continental Cluster') +
+  facet_wrap(~ concLabel)
+ggsave('pdf/conftime-continental-plutus.pdf')
+
+conftimePlot(dPlutus %>% filter(regions == 'Global')) +
+  ggtitle(waiver(), subtitle = 'Plutus Transactions, Global Cluster') +
+  facet_wrap(~ concLabel)
+ggsave('pdf/conftime-global-plutus.pdf')
