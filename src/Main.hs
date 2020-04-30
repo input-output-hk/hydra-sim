@@ -3,6 +3,7 @@ module Main where
 
 import Control.Monad (when, forM_)
 import Control.Monad.Class.MonadTime
+import Control.Monad.IOSim (ThreadLabel)
 import Data.List (intercalate)
 import Data.Semigroup ((<>))
 import HydraSim.Analyse
@@ -74,6 +75,15 @@ cli = CLI
                     <> value 1
                     <> help "How much to print on the command line." ))
 
+data Datum = Datum {
+  dCapacity :: Natural ,
+  dTime :: Maybe DiffTime,
+  dSnapSize :: Maybe String,
+  dNode :: Maybe ThreadLabel,
+  dObject :: String,
+  dValue :: String
+  }
+
 main :: IO ()
 main = do
   let parser = info (cli <**> helper)
@@ -85,7 +95,7 @@ main = do
   doesExist <- doesFileExist fp
   let mode = if doesExist then AppendMode else WriteMode
   withFile fp mode $ \h -> do
-    when (not doesExist) (hPutStrLn h "t,object,conftime,bandwidth,txtype,conc,regions,node,tps,snapsize,clustersize")
+    when (not doesExist) (hPutStrLn h csvHeader)
 
     let baseline scenario = Baseline {
           blScenario = scenario,
@@ -114,20 +124,25 @@ main = do
       let tpsBound = findIntersection bl (fromIntegral $ minimum (networkCapacity opts),
                                           fromIntegral $ maximum (networkCapacity opts))
       forM_ tpsBound $ \(capacity, bound) ->
-        hPutStrLn h $ intercalate ","
-          [showt 0, scenario, "NA", show $ capacity, show $ txType opts,
-           show $ concurrency opts, showCenterList $ regions opts, "NA",
-           show (tpsTotalBound bound), snapsize bl, show (length $ regions opts)]
-
-
+        hPutStrLn h $ csvLine opts Datum { dCapacity = fromIntegral capacity,
+                                           dTime = Nothing,
+                                           dSnapSize = Just $ snapsize bl,
+                                           dNode = Nothing,
+                                           dObject = scenario ++ "-tps",
+                                           dValue = show $ tpsTotalBound bound
+                                         }
 
     forM_ (networkCapacity opts) $ \capacity -> do
 
       let minConfTimes = minConfTime ((baseline HydraUnlimited) {blBandwidth = fromIntegral capacity})
       forM_ minConfTimes $ \(region, confTime) -> do
-        hPutStrLn h $ intercalate ","
-          [showt 0, "tx-baseline", showt confTime, show $ capacity, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, show region, "NA", "NA", show (length $ regions opts)]
-
+        hPutStrLn h $ csvLine opts Datum { dCapacity = capacity,
+                                           dTime = Nothing,
+                                           dSnapSize = Nothing,
+                                           dNode = Just $ show region,
+                                           dObject = "min-conftime",
+                                           dValue = showt confTime
+                                           }
 
       let specs = flip map (regions opts) $ \center ->
             NodeSpec {nodeRegion = center,
@@ -139,7 +154,7 @@ main = do
                       nodeASigTime = secondsToDiffTimeTriplet $ asigTime opts
                      }
       (txs, snaps) <- analyseRun (verbosity opts) (runNodes specs)
-      writeCSV h opts capacity specs txs snaps
+      writeCSV h opts capacity txs snaps
       when (verbosity opts > 0) $ do
         let tpsUnlimited = baselineTPS (baseline HydraUnlimited)
             tpsFullTrust = baselineTPS (baseline FullTrust)
@@ -160,17 +175,34 @@ secondsToDiffTime = picosecondsToDiffTime . round . (*1e12)
 secondsToDiffTimeTriplet :: (Double, Double, Double) -> (DiffTime, DiffTime, DiffTime)
 secondsToDiffTimeTriplet (a,b,c) = (secondsToDiffTime a, secondsToDiffTime b, secondsToDiffTime c)
 
-writeCSV :: Handle -> CLI -> Natural -> [NodeSpec] -> [TxConfirmed] -> [SnConfirmed] -> IO ()
-writeCSV h opts capacity specs txs snaps = do
-  let nNodes = length specs
-      tpsInRun = tps txs
+writeCSV :: Handle -> CLI -> Natural -> [TxConfirmed] -> [SnConfirmed] -> IO ()
+writeCSV h opts capacity txs snaps = do
+  hPutStrLn h $ csvLine opts Datum { dCapacity = capacity,
+                                     dTime = Nothing,
+                                     dSnapSize = Nothing, -- TODO: maybe use average snapshot size?
+                                     dNode = Nothing,
+                                     dObject = "tps",
+                                     dValue = show $ tps txs
+                                   }
   forM_ (drop (discardEdges opts) . reverse . drop (discardEdges opts) $ txs) $ \tx -> case tx of
-    TxConfirmed node t dt -> hPutStrLn h $ intercalate ","
-      [showt (timeToDiffTime t), "tx", showt dt, show $ capacity, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, node, show tpsInRun, "NA", show nNodes]
+    TxConfirmed node t dt -> hPutStrLn h $
+      csvLine opts Datum { dCapacity = capacity,
+                           dTime = Just $ timeToDiffTime t,
+                           dSnapSize = Nothing,
+                           dNode = Just node,
+                           dObject = "conftime-tx",
+                           dValue = showt dt
+                         }
     TxUnconfirmed _ _ -> return ()
   forM_ snaps $ \snap -> case snap of
-    SnConfirmed node size t dt -> hPutStrLn h $ intercalate ","
-      [showt (timeToDiffTime t), "snap", showt dt, show $ capacity, show $ txType opts, show $ concurrency opts, showCenterList $ regions opts, node, show tpsInRun, show size, show nNodes]
+    SnConfirmed node size t dt -> hPutStrLn h $
+      csvLine opts Datum { dCapacity = capacity,
+                           dTime = Just $ timeToDiffTime t,
+                           dSnapSize = Just $ show size,
+                           dNode = Just node,
+                           dObject = "conftime-snap",
+                           dValue = showt dt
+                         }
     SnUnconfirmed _ _ _ -> return ()
 
 showt :: DiffTime -> String
@@ -181,3 +213,23 @@ timeToDiffTime t = t `diffTime` Time 0
 
 showCenterList :: [AWSCenters] -> String
 showCenterList centers = intercalate "-" $ map show centers
+
+csvHeader :: String
+csvHeader = "bandwidth,txtype,conc,regions,node,clustersize,t,snapsize,object,value"
+
+csvLine :: CLI -> Datum -> String
+csvLine opts dat = intercalate ","
+  [show $ dCapacity dat,
+   show $ txType opts,
+   show $ concurrency opts,
+   showCenterList $ regions opts,
+   nodeString,
+   show (length (regions opts)),
+   tString,
+   snapSizeString,
+   dObject dat,
+   dValue dat]
+  where
+    tString = maybe "na" show $ dTime dat
+    snapSizeString = maybe "na" id $ dSnapSize dat
+    nodeString = maybe "na" id $ dNode dat
