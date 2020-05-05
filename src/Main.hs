@@ -115,7 +115,9 @@ main = do
           [("hydra-unlimited-infinte-conc",
             (baseline HydraUnlimited) {blConc = UnlimitedConc,
                                        blSnapshots = snap})
-          | snap <- baselineSnapshots opts ]
+          | snap <- baselineSnapshots opts ],
+          [("sprites-unlimited", (baseline SpritesUnlimited) {blSnapshots = NoSnapshots})],
+          [("sprites-unlimited-infinte-conc", (baseline SpritesUnlimited) {blConc = UnlimitedConc})]
           ]
         snapsize bl = case blSnapshots bl of
           NoSnapshots -> "infinite"

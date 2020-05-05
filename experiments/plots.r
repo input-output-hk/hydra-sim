@@ -2,8 +2,9 @@
 library(ggplot2)
 library(dplyr)
 library(forcats)
-
-theme_set(theme_light())
+install.packages("viridis")
+library(viridis)
+theme_set(theme_bw())
 
 
 readData <- function(fp) {
@@ -44,39 +45,50 @@ readData <- function(fp) {
              as.factor(conc),
              'Concurrency 1' = '1',
              'Concurrency 2' = '2',
+             'Concurrency 5' = '5',
              'Concurrency 10' = '10',
              'Concurrency 20' = '20'))
-  renameNodes(d)
+  renameNodes(d) %>% filter(conc %in% c(1, 5, 10))
 }
 
 breaks <- 10^(-10:10)
 minor_breaks <- rep(1:9, 21)*(10^rep(-10:10, each=9))
 baseline_hu_inf <- function(d) {
-  geom_line(data = subset(d, object=='hydra-unlimited-infinte-conc-tps'),
+  geom_line(data = subset(d, object=='hydra-unlimited-infinte-conc-tps'), size=1,
             aes(colour = 'Hydra Unlimited', linetype=snapsize))
 }
 baseline_hu <- function(d) {
-  geom_line(data = subset(d, object=='hydra-unlimited-tps'),
+  geom_line(data = subset(d, object=='hydra-unlimited-tps'), size=1,
             aes(colour = 'Hydra Unlimited', linetype=snapsize))
 }
 
 baseline_ft_inf <- function(d) {
-  geom_line(data = subset(d, object=='full-trust-infinte-conc-tps'),
+  geom_line(data = subset(d, object=='full-trust-infinte-conc-tps'), size=1,
             aes(colour = 'Universal'))
 }
 baseline_ft <- function(d) {
-  geom_line(data = subset(d, object=='full-trust-tps'),
+  geom_line(data = subset(d, object=='full-trust-tps'), size=1,
             aes(colour = 'Universal'))
 }
+
+baseline_sp_inf <- function(d) {
+  geom_line(data = subset(d, object=='sprites-unlimited-infinte-conc-tps'), size=1,
+            aes(colour = 'Sprites Unlimited'))
+}
+baseline_sp <- function(d) {
+  geom_line(data = subset(d, object=='sprites-unlimited-tps'), size=1,
+            aes(colour = 'Sprites Unlimited'))
+}
+
 points <- function(d) {
-  geom_point(data = subset(d, object=='tps'))
+  geom_point(data = subset(d, object=='tps'), size = 2.5)
 }
 
 linescale <- scale_linetype_manual('Snapshot size', limits = c('1', '2', '5', '10', 'infinite'), values = c('dotted', 'dashed', 'dotdash', 'longdash', 'solid'))
 
 themeSettings <- theme(legend.position = 'bottom',
                        legend.box = 'vertical',
-                       text = element_text(size=24))
+                       text = element_text(size=32))
 
 tpsPlot <- function(d) {
   ggplot(d, aes(x = bandwidth/1024, y = value)) +
@@ -84,7 +96,11 @@ tpsPlot <- function(d) {
                 , breaks = breaks, minor_breaks = minor_breaks) +
     scale_y_log10(name = 'transaction throughput [tx/s]'
                 , breaks = breaks, minor_breaks = minor_breaks) +
-    scale_color_hue('Baseline')
+    scale_color_viridis('Baseline', discrete=TRUE,
+                        option="magma",
+                        ## begin = 0.2,
+                        end = 0.8)
+    ## scale_color_hue('Baseline')
 }
 
 
@@ -97,6 +113,7 @@ dPlutus = readData('csv/plutus.csv')
 tpsPlot(dSimple) +
   baseline_ft_inf(dSimple) +
   baseline_hu_inf(dSimple) +
+  baseline_sp_inf(dSimple) +
   linescale + themeSettings +
   ggtitle('Universal and Hydra Unlimited Baselines',
           subtitle = 'Simple Transactions, Zero Latency')
@@ -113,41 +130,45 @@ ggsave('pdf/baselines-nolat-plutus.pdf')
 ## Comparison of the baselines, including finite latency
 tpsPlot(dSimple) +
   baseline_ft(dSimple) + baseline_hu(dSimple) +
+  baseline_sp(dSimple) +
   linescale + themeSettings +
   facet_grid(regions ~ concLabel) +
-  ggtitle('Universal and Hydra Unlimited Baselines',
+  ggtitle('Universal and Protocol Specific Baselines',
           subtitle = 'Simple Transactions')
 ggsave('pdf/baselines-simple.pdf')
 
 tpsPlot(dPlutus) +
   baseline_ft(dPlutus) + baseline_hu(dPlutus) +
   linescale + themeSettings +
+  baseline_sp(dPlutus) +
   facet_grid(regions ~ concLabel) +
-  ggtitle('Universal and Hydra Unlimited Baselines',
-          subtitle = 'Plutus Transactions')
+  ggtitle('Universal and Protocol Specific Baselines',
+          subtitle = 'Script Transactions')
 ggsave('pdf/baselines-plutus.pdf')
 
 ## Experimental Evaluation
 tpsPlot(dSimple) +
-  baseline_ft(dSimple) + baseline_hu(dSimple) +
+  baseline_ft(dSimple) + baseline_hu(dSimple %>% filter(snapsize %in% c('1', '2', 'infinite'))) +
+  baseline_sp(dSimple) +
   points(dSimple) +
   linescale + themeSettings +
-  facet_grid(regions ~ concLabel) +
-  ggtitle('Experimental Evaluation',
-          subtitle = 'Simple Transactions')
-ggsave('pdf/tps-simple.pdf')
+  facet_grid(regions ~ concLabel, scales = 'free_y') +
+  scale_linetype_manual('Snapshot size', limits = c('1', '2', 'infinite'), values = c('dotted', 'dashed', 'solid'))
+##  +
+  ## ggtitle('Experimental Evaluation',
+  ##         subtitle = 'Simple Transactions')
+ggsave('pdf/tps-simple.pdf', width = 16, height = 18)
 
 tpsPlot(dPlutus) +
-  baseline_ft(dPlutus) + baseline_hu(dPlutus) +
+  baseline_ft(dPlutus) + baseline_hu(dPlutus %>% filter(snapsize %in% c('1', '2', 'infinite'))) +
+  baseline_sp(dPlutus) +
   points(dPlutus) +
   linescale + themeSettings +
-  facet_grid(regions ~ concLabel) +
-  ggtitle('Experimental Evaluation',
-          subtitle = 'Plutus Transactions')
-ggsave('pdf/tps-plutus.pdf')
-
-
-dSimple2 <- renameNodes(dSimple)
+  facet_grid(regions ~ concLabel, scales = 'free_y') +
+  scale_linetype_manual('Snapshot size', limits = c('1', '2', 'infinite'), values = c('dotted', 'dashed', 'solid'))##  +
+  ## ggtitle('Experimental Evaluation',
+  ##         subtitle = 'Script Transactions')
+ggsave('pdf/tps-plutus.pdf', width = 16, height = 18)
 
 
 conftimePlot <- function(d) {
@@ -159,15 +180,22 @@ ggplot(d, aes(x = bandwidth/1024, y = value)) +
   scale_y_log10(name = 'transaction confirmation time [s]',
                 breaks = 10^(-2:1), minor_breaks = rep(1:9, 4)*(10^rep(-2:1, each=9))) +
   themeSettings +
-  scale_colour_hue('Node Location') +
-  guides(color = guide_legend(override.aes = list(linetype = 1, alpha = 1))) +
-  ggtitle('Transaction Confirmation Time')
+  scale_color_viridis('Node Location', discrete=TRUE,
+                      option="magma",
+                      begin = 0.2,
+                      end = 0.8) +
+  ## scale_colour_hue('Node Location') +
+  guides(color = guide_legend(override.aes = list(linetype = 1, alpha = 1)))##  +
+  ## ggtitle('Transaction Confirmation Time')
 }
 
 conftimePlot(dSimple %>% filter(regions == 'Local')) +
-  ggtitle(waiver(), subtitle = 'Simple Transactions, Local Cluster') +
+  ## ggtitle(waiver(), subtitle = 'Simple Transactions, Local Cluster') +
+  scale_y_log10(name = 'transaction confirmation time [s]',
+                breaks = 10^(-2:1), minor_breaks = rep(1:9, 4)*(10^rep(-2:1, each=9)),
+                limits = c(0.01,1)) +
   facet_wrap(~ concLabel)
-ggsave('pdf/conftime-local-simple.pdf')
+ggsave('pdf/conftime-local-simple.pdf', width = 16, height = 9)
 
 conftimePlot(dSimple %>% filter(regions == 'Continental')) +
   ggtitle(waiver(), subtitle = 'Simple Transactions, Continental Cluster') +
@@ -192,6 +220,9 @@ conftimePlot(dPlutus %>% filter(regions == 'Continental')) +
 ggsave('pdf/conftime-continental-plutus.pdf')
 
 conftimePlot(dPlutus %>% filter(regions == 'Global')) +
-  ggtitle(waiver(), subtitle = 'Plutus Transactions, Global Cluster') +
+  ## ggtitle(waiver(), subtitle = 'Plutus Transactions, Global Cluster') +
+  scale_y_log10(name = 'transaction confirmation time [s]',
+                breaks = 10^(-2:1), minor_breaks = rep(1:9, 4)*(10^rep(-2:1, each=9)),
+                limits = c(0.1,1)) +
   facet_wrap(~ concLabel)
-ggsave('pdf/conftime-global-plutus.pdf')
+ggsave('pdf/conftime-global-plutus.pdf', width = 16, height = 9)
