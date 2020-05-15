@@ -70,8 +70,10 @@ data Baseline = Baseline {
 baselineTPS :: Baseline -> TPSBound
 baselineTPS bl = TPSBound cpuBound bandwidthBound mlatencyBound
   where
-    allNodes = fromIntegral $ length (blLocations bl)
+    allNodes = length (blLocations bl)
     otherNodes = allNodes - 1
+    allNodesT = fromIntegral allNodes :: DiffTime
+    otherNodesT = fromIntegral otherNodes :: DiffTime
     (_signTime, _aggregateTime, verifySigTime) = blAsigTimes bl
     cpuBound = case blScenario bl of
       FullTrust ->
@@ -83,26 +85,24 @@ baselineTPS bl = TPSBound cpuBound bandwidthBound mlatencyBound
               FiniteConc conc -> verifySigTime `multiplyDiffTime` (1/(fromIntegral (length (blLocations bl)) * fromIntegral conc))
               UnlimitedConc -> 0
         in perSecond $ validationTime bl + sigTime
-    bandwidthBound = case (blConc bl, blScenario bl) of
-      (_conc, scen)
+    bandwidthBound = case blScenario bl of
+      scen
         | scen `elem` [FullTrust, HydraUnlimited] ->
-            perSecond $ otherNodes/allNodes * (
+            perSecond $ otherNodesT/allNodesT * (
             (capacity bl (txMsgSize bl)) + ((capacity bl (snMsgSize bl)) `multiplyDiffTime` snapFactor))
-      (UnlimitedConc, SpritesUnlimited) ->
-        perSecond $ otherNodes/allNodes * (capacity bl (reqTxSize bl + ackTxSize bl))
-      (FiniteConc conc, SpritesUnlimited) -> minimum $ perSecond . (*(otherNodes/(allNodes*fromIntegral conc))) <$>
+      SpritesUnlimited -> minimum $ perSecond <$>
         [
-          capacity bl (fromIntegral conc * reqTxSize bl + ackTxSize bl),
-          capacity bl (reqNTxSize bl + confNTxSize bl)
-
+          capacity bl (round ((fromIntegral otherNodes / fromIntegral allNodes :: Double ) * fromIntegral (reqTxSize bl)) +
+                       fromIntegral otherNodes * ackNTxSizePerMessage bl),
+          capacity bl (fromIntegral otherNodes * (reqNTxSizePerMessage bl + confNTxSizePerMessage bl))
         ]
     mlatencyBound = case (blConc bl, blScenario bl) of
       (UnlimitedConc, _scen) -> Nothing
       (FiniteConc conc, scen)
         | scen `elem` [FullTrust, HydraUnlimited] -> Just $
-          perSecond ((maximum . map snd $ networkDelays bl)*2/(fromIntegral conc * allNodes))
+          perSecond ((maximum . map snd $ networkDelays bl)*2/(fromIntegral conc * allNodesT))
         | scen == SpritesUnlimited -> Just $
-          perSecond ((maximum . map snd $ networkDelays bl)*4/(fromIntegral conc * allNodes))
+          perSecond ((maximum . map snd $ networkDelays bl)*4/(fromIntegral conc * allNodesT))
     snapFactor = case blSnapshots bl of
       NoSnapshots -> 0
       SnapAfter n -> 1 / (fromIntegral n :: Double)
@@ -162,13 +162,6 @@ ackTxSize bl = case blScenario bl of
       size (NewSn :: HeadProtocol MockTx) + size (TxId 0)
   HydraUnlimited ->
       size $ SigAckTx (mtxRef $ sampleTx bl) (sampleSig bl)
-  SpritesUnlimited ->
-      let nNodes = fromIntegral $ length (blLocations bl)
-      in case blConc bl of
-    UnlimitedConc -> nNodes * size (mtxRef $ sampleTx bl) -- for unlimited concurrency, the overhead from the header and signature tends to zero
-    FiniteConc conc ->
-      size (SigAckTx (mtxRef $ sampleTx bl) (sampleSig bl)) +
-         nNodes * fromIntegral conc * size (mtxRef $ sampleTx bl)
 
 txMsgSize :: Baseline -> Size
 txMsgSize bl = sum [
@@ -192,13 +185,39 @@ reqTxSize bl = size $ SigReqTx (sampleTx bl)
 confTxSize :: Baseline -> Size
 confTxSize bl = size (SigConfTx (TxId 0) (sampleASig bl))
 
-confNTxSize :: Baseline -> Size
-confNTxSize bl = size (SigConfTx (TxId 0) (sampleASig bl)) +
-  (fromIntegral $ batchSize bl - 1) * size (sampleASig bl)
+-- In the Sprites Unlimited baseline, we do req, ack, and conf in batches. As
+-- batrch size, we take the number of nodes times the transaction concurrency
+-- per node. We need to provide the sizes of the involved messages. Of course,
+-- they are only finite for finite concurrency. For infinite concurrency, the
+-- message size itself will diverge, but the ratio of message size/transaction
+-- will still be finite. So instead of providing the raw message size, we
+-- provide the message size _per transaction_ (in the limit of inifinite batch
+-- size).
 
-reqNTxSize :: Baseline -> Size
-reqNTxSize bl = size (SigReqTx (sampleTx bl)) +
-  (fromIntegral $ batchSize bl - 1) * size (sampleTx bl)
+confNTxSizePerMessage :: Baseline -> Size
+confNTxSizePerMessage bl = case blConc bl of
+  FiniteConc _conc -> perMessage bl $
+    size (SigConfTx (TxId 0) (sampleASig bl)) +
+    (fromIntegral $ batchSize bl - 1) * size (TxId 0)
+  UnlimitedConc -> size (TxId 0)
+
+reqNTxSizePerMessage :: Baseline -> Size
+reqNTxSizePerMessage bl = case blConc bl of
+  FiniteConc _conc -> perMessage bl $
+    size (SigReqTx (sampleTx bl)) +
+    (fromIntegral $ batchSize bl - 1) * size (sampleTx bl)
+  UnlimitedConc -> size $ sampleTx bl
+
+ackNTxSizePerMessage :: Baseline -> Size
+ackNTxSizePerMessage bl = case blConc bl of
+  FiniteConc _conc -> perMessage bl $
+    size (SigAckTx (TxId 0) (sampleSig bl)) +
+    (fromIntegral $ batchSize bl - 1) * size (TxId 0)
+  UnlimitedConc -> size $ TxId 0
+
+perMessage :: Baseline -> Size -> Size
+perMessage bl s =
+  round $ (fromIntegral s :: Double)/(fromIntegral $ batchSize bl)
 
 sampleSig :: Baseline -> Sig
 sampleSig bl = unComp (ms_sig_tx (simpleMsig $ blAsigTimes bl) (SKey 0) (sampleTx bl))
@@ -209,6 +228,7 @@ sampleASig bl = unComp (ms_asig_tx (simpleMsig $ blAsigTimes bl) (sampleTx bl) S
 batchSize :: Baseline -> Int
 batchSize bl = case blConc bl of
   FiniteConc conc -> conc * length (blLocations bl)
+  UnlimitedConc -> error "batchSize undefined for infinite transaction concurrency."
 
 validationTime :: Baseline -> DiffTime
 validationTime bl = mtxValidationDelay $ sampleTx bl

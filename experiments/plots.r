@@ -2,7 +2,7 @@
 library(ggplot2)
 library(dplyr)
 library(forcats)
-install.packages("viridis")
+## install.packages("viridis")
 library(viridis)
 theme_set(theme_bw())
 
@@ -47,7 +47,17 @@ readData <- function(fp) {
              'Concurrency 2' = '2',
              'Concurrency 5' = '5',
              'Concurrency 10' = '10',
-             'Concurrency 20' = '20'))
+             'Concurrency 20' = '20'),
+           blType = fct_recode(
+             object,
+             'infinite concurrency' = 'hydra-unlimited-infinte-conc-tps',
+             'infinite concurrency' = 'full-trust-infinte-conc-tps',
+             'infinite concurrency' = 'sprites-unlimited-infinte-conc-tps',
+             'finite concurrency' = 'hydra-unlimited-tps',
+             'finite concurrency' = 'full-trust-tps',
+             'finite concurrency' = 'sprites-unlimited-tps'
+           )
+           )
   renameNodes(d) %>% filter(conc %in% c(1, 5, 10))
 }
 
@@ -88,7 +98,9 @@ linescale <- scale_linetype_manual('Snapshot size', limits = c('1', '2', '5', '1
 
 themeSettings <- theme(legend.position = 'bottom',
                        legend.box = 'vertical',
-                       text = element_text(size=32))
+                       text = element_text(size=32),
+                       legend.key.width = unit(2,"cm")
+                       )
 
 tpsPlot <- function(d) {
   ggplot(d, aes(x = bandwidth/1024, y = value)) +
@@ -114,10 +126,27 @@ tpsPlot(dSimple) +
   baseline_ft_inf(dSimple) +
   baseline_hu_inf(dSimple) +
   baseline_sp_inf(dSimple) +
-  linescale + themeSettings +
+  linescale + themeSettings + theme(legend.position = 'none') +
   ggtitle('Universal and Hydra Unlimited Baselines',
           subtitle = 'Simple Transactions, Zero Latency')
 ggsave('pdf/baselines-nolat-simple.pdf')
+
+## example of finite concurrency
+d <- dSimple %>% filter(conc == 5) %>% filter(regions == 'Continental') %>% filter(blType %in% c('finite concurrency', 'infinite concurrency'))
+tpsPlot(d) +
+  baseline_ft_inf(dSimple) + baseline_hu_inf(dSimple) + baseline_sp_inf(dSimple) +
+  baseline_ft(d) + baseline_hu(d) + baseline_sp(d) +
+  linescale + themeSettings +
+  facet_grid(. ~ blType)
+ggsave('pdf/baselines.pdf', width = 16, height = 9)
+
+## +
+##   theme(legend.position = c(.95, .05),
+##         legend.box = 'vertical',
+##         legend.justification = c('right', 'bottom'))
+
+
+
 
 tpsPlot(dPlutus) +
   baseline_ft_inf(dPlutus) +
