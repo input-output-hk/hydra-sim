@@ -1,11 +1,9 @@
-{-# LANGUAGE TupleSections #-}
 module Main where
 
 import Control.Monad (when, forM_)
 import Control.Monad.Class.MonadTime
 import Control.Monad.IOSim (ThreadLabel)
 import Data.List (intercalate)
-import Data.Semigroup ((<>))
 import HydraSim.Analyse
 import HydraSim.Examples.Baselines
 import HydraSim.Examples.Channels
@@ -15,7 +13,7 @@ import Numeric.Natural
 import Options.Applicative
 import System.Directory (doesFileExist)
 import System.IO
-import Data.Time.Clock (DiffTime, picosecondsToDiffTime)
+import Data.Time.Clock (picosecondsToDiffTime)
 
 data CLI = CLI {
   regions :: [AWSCenters],
@@ -34,46 +32,46 @@ data CLI = CLI {
 cli :: Parser CLI
 cli = CLI
   <$> some (argument auto (metavar "NVirginiaAWS | OhioAWS | NCaliforniaAWS | OregonAWS | CanadaAWS | IrelandAWS | LondonAWS | FrankfurtAWS | TokyoAWS | SeoulAWS | SingaporeAWS | SydneyAWS | MumbaiAWS | SaoPauloAWS | GL10"))
-  <*> (option auto (short 'b'
+  <*> option auto (short 'b'
                     <> long "bandwidth"
                     <> value [500, 1000, 2000, 3000, 4000, 5000]
-                    <> help "Network bandwidth (inbound and outbound) of the nodes, in kbits/s."))
-  <*> (option auto (short 't'
+                    <> help "Network bandwidth (inbound and outbound) of the nodes, in kbits/s.")
+  <*> option auto (short 't'
                     <> long "txType"
                     <> metavar "Plutus | Simple"
                     <> value Simple
-                    <> help "Types of transactions to send."))
-  <*> (option auto (short 'c'
+                    <> help "Types of transactions to send.")
+  <*> option auto (short 'c'
                     <> long "concurrency"
                     <> value 1
-                    <> help "Determines how many transaction any node will send before older transactions are confirmed."))
-  <*> (option auto (short 'n'
+                    <> help "Determines how many transaction any node will send before older transactions are confirmed.")
+  <*> option auto (short 'n'
                     <> value 50
-                    <> help "Number of transactions each node will send."))
-  <*> (option auto (long "snapshots"
+                    <> help "Number of transactions each node will send.")
+  <*> option auto (long "snapshots"
                     <> help "Sets the strategy for when to create snapshots"
                     <> metavar "NoSnapshots | SnapAfter N"
-                    <> value (SnapAfter 1)))
-  <*> (option auto (long "baseline-snapshots"
+                    <> value (SnapAfter 1))
+  <*> option auto (long "baseline-snapshots"
                     <> help "Sets the strategy for when to create snapshots"
                     <> metavar "NoSnapshots | SnapAfter N"
-                    <> value [NoSnapshots]))
-  <*> (option auto (long "aggregate-signature-time"
+                    <> value [NoSnapshots])
+  <*> option auto (long "aggregate-signature-time"
                     <> help "time (in seconds) for MSig operations (signing, aggregating, validating)"
                     <> value (0.00015, 0.000010, 0.00085)
-                    <> metavar "(T_SIGN, T_AGGREGATE, T_VERIFY)"))
-  <*> (strOption (short 'o'
+                    <> metavar "(T_SIGN, T_AGGREGATE, T_VERIFY)")
+  <*> strOption (short 'o'
                    <> long "output"
                    <> help "Write output to CSV file"
-                   <> value "out.csv" ))
-  <*> (option auto (long "discard-edges"
+                   <> value "out.csv" )
+  <*> option auto (long "discard-edges"
                     <> help "When writing data for confirmation time, discard the first and last N samples (allow for warmup/cooldown)"
                     <> metavar "N"
-                    <> value 0))
-  <*> (option auto (short 'v'
+                    <> value 0)
+  <*> option auto (short 'v'
                     <> long "verbosity"
                     <> value 1
-                    <> help "How much to print on the command line." ))
+                    <> help "How much to print on the command line." )
 
 data Datum = Datum {
   dCapacity :: Natural ,
@@ -95,7 +93,7 @@ main = do
   doesExist <- doesFileExist fp
   let mode = if doesExist then AppendMode else WriteMode
   withFile fp mode $ \h -> do
-    when (not doesExist) (hPutStrLn h csvHeader)
+    unless doesExist (hPutStrLn h csvHeader)
 
     let baseline scenario = Baseline {
           blScenario = scenario,
@@ -137,14 +135,14 @@ main = do
     forM_ (networkCapacity opts) $ \capacity -> do
 
       let minConfTimes = minConfTime ((baseline HydraUnlimited) {blBandwidth = fromIntegral capacity})
-      forM_ minConfTimes $ \(region, confTime) -> do
+      forM_ minConfTimes $ \(region, confTime) ->
         hPutStrLn h $ csvLine opts Datum { dCapacity = capacity,
-                                           dTime = Nothing,
-                                           dSnapSize = Nothing,
-                                           dNode = Just $ show region,
-                                           dObject = "min-conftime",
-                                           dValue = showt confTime
-                                           }
+                                         dTime = Nothing,
+                                         dSnapSize = Nothing,
+                                         dNode = Just $ show region,
+                                         dObject = "min-conftime",
+                                         dValue = showt confTime
+                                         }
 
       let specs = flip map (regions opts) $ \center ->
             NodeSpec {nodeRegion = center,
@@ -160,7 +158,7 @@ main = do
       when (verbosity opts > 0) $ do
         let tpsUnlimited = baselineTPS (baseline HydraUnlimited)
             tpsFullTrust = baselineTPS (baseline FullTrust)
-        putStrLn $ concat ["Minimal confirmation time: ", show (minConfTime $ baseline HydraUnlimited)]
+        putStrLn $ "Minimal confirmation time: " ++ show (minConfTime $ baseline HydraUnlimited)
         putStrLn $ concat ["Maximal throughput (Hydra Unlimited): ",
                            show tpsUnlimited,
                            percent (tps txs) (tpsTotalBound tpsUnlimited)]
@@ -205,7 +203,7 @@ writeCSV h opts capacity txs snaps = do
                            dObject = "conftime-snap",
                            dValue = showt dt
                          }
-    SnUnconfirmed _ _ _ -> return ()
+    SnUnconfirmed {} -> return ()
 
 showt :: DiffTime -> String
 showt = show . diffTimeToSeconds
@@ -233,5 +231,5 @@ csvLine opts dat = intercalate ","
    dValue dat]
   where
     tString = maybe "na" show $ dTime dat
-    snapSizeString = maybe "na" id $ dSnapSize dat
-    nodeString = maybe "na" id $ dNode dat
+    snapSizeString = Data.Maybe.fromMaybe "na" $ dSnapSize dat
+    nodeString = Data.Maybe.fromMaybe "na" $ dNode dat
