@@ -1,9 +1,10 @@
 module Main where
 
-import Control.Monad (when, forM_)
+import Control.Monad (unless, when, forM_)
 import Control.Monad.Class.MonadTime
 import Control.Monad.IOSim (ThreadLabel)
 import Data.List (intercalate)
+import Data.Maybe
 import HydraSim.Analyse
 import HydraSim.Examples.Baselines
 import HydraSim.Examples.Channels
@@ -231,5 +232,5 @@ csvLine opts dat = intercalate ","
    dValue dat]
   where
     tString = maybe "na" show $ dTime dat
-    snapSizeString = Data.Maybe.fromMaybe "na" $ dSnapSize dat
-    nodeString = Data.Maybe.fromMaybe "na" $ dNode dat
+    snapSizeString = fromMaybe "na" $ dSnapSize dat
+    nodeString = fromMaybe "na" $ dNode dat
