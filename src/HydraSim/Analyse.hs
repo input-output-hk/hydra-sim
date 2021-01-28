@@ -68,7 +68,7 @@ selectTraceHydraEvents showDebugMessages = go
     go (Trace _ _ _ _ trace)      =         go trace
     go (TraceMainException _ e _) = throw e
     go (TraceDeadlock      _   _) = [] -- expected result in many cases
-    go (TraceMainReturn    _ _ _) = []
+    go TraceMainReturn{} = []
 
 dynamicTracer :: Typeable a => Tracer (SimM s) a
 dynamicTracer = Tracer traceM

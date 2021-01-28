@@ -16,8 +16,7 @@ import Control.Monad.Class.MonadAsync
 import Control.Monad.Class.MonadSTM
 import Control.Monad.Class.MonadTime
 import Control.Monad.Class.MonadTimer
-import Data.Time.Clock (DiffTime,
-                        diffTimeToPicoseconds,
+import Data.Time.Clock (diffTimeToPicoseconds,
                         picosecondsToDiffTime)
 import Numeric.Natural
 import System.Random (RandomGen(..), Random(..))
@@ -49,8 +48,8 @@ createConnectedChannels :: MonadSTM m => m (Channel m a, Channel m a)
 createConnectedChannels = do
     -- Create two TMVars to act as the channel buffer (one for each direction)
     -- and use them to make both ends of a bidirectional channel
-    bufferA <- atomically $ newEmptyTMVar
-    bufferB <- atomically $ newEmptyTMVar
+    bufferA <- newEmptyTMVarIO
+    bufferB <- newEmptyTMVarIO
 
     return (mvarsAsChannel bufferB bufferA,
             mvarsAsChannel bufferA bufferB)

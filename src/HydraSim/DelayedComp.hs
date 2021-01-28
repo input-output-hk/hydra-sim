@@ -7,7 +7,6 @@ module HydraSim.DelayedComp
   ) where
 
 import Control.Monad.Class.MonadTimer
-import Data.Time.Clock (DiffTime)
 
 
 -- | A computation that might take a non-neglible amount of time.
