@@ -1,5 +1,5 @@
 { # Fetch the latest haskell.nix and import its default.nix
-  haskellNix ? import (builtins.fetchTarball "https://github.com/input-output-hk/haskell.nix/archive/master.tar.gz") {}
+  haskellNix ? import (builtins.fetchTarball "https://github.com/input-output-hk/haskell.nix/archive/ef4aef4ce2060dc1a41b2690df1f54f986e0f9ab.tar.gz") {}
 
 # haskell.nix provides access to the nixpkgs pins which are used by our CI,
 # hence you will be more likely to get cache hits when using these.

@@ -18,7 +18,6 @@ import           Control.Monad.Class.MonadTimer
 import           Control.Tracer
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import           Data.Time.Clock (DiffTime)
 import           HydraSim.Channel
 import           HydraSim.DelayedComp
 import           HydraSim.HeadNode.Handler (handleMessage)
