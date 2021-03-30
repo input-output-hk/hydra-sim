@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 mkdir -p csv pdf
 
 export locations=('FrankfurtAWS FrankfurtAWS FrankfurtAWS' 'IrelandAWS FrankfurtAWS LondonAWS' 'OregonAWS FrankfurtAWS TokyoAWS')
