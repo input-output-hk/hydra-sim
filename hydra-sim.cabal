@@ -26,7 +26,7 @@ executable hydra-sim
                      , HydraSim.Examples.Nodes
                      , HydraSim.Examples.Txs
                      , HydraSim.HeadNode
-                     , HydraSim.HeadNode.Handler
+                     , HydraSim.HeadNode.SimpleProtocolHandler
                      , HydraSim.MSig.Mock
                      , HydraSim.Multiplexer
                      , HydraSim.Multiplexer.Exception

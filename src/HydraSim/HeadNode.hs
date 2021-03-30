@@ -20,7 +20,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import           HydraSim.Channel
 import           HydraSim.DelayedComp
-import           HydraSim.HeadNode.Handler (handleMessage)
+import           HydraSim.HeadNode.SimpleProtocolHandler (handleMessage)
 import           HydraSim.MSig.Mock
 import           HydraSim.Multiplexer
 import           HydraSim.Sized
