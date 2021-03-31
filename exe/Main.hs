@@ -2,16 +2,14 @@ module Main where
 
 import Control.Monad (forM_, unless, when)
 import Control.Monad.Class.MonadTime
-import Control.Monad.IOSim (ThreadLabel, runSimTrace)
+import Control.Monad.IOSim (ThreadLabel)
 import Data.List (intercalate)
 import Data.Maybe
-import Data.Time.Clock (picosecondsToDiffTime)
 import HydraSim.Analyse
 import HydraSim.Examples.Baselines
 import HydraSim.Examples.Channels
-import HydraSim.Examples.Nodes
 import HydraSim.Options
-import HydraSim.run
+import HydraSim.Run
 import HydraSim.Types
 import Numeric.Natural
 import Options.Applicative
@@ -111,7 +109,7 @@ main = do
                             , dValue = showt confTime
                             }
 
-            let traceRun = runSimulation opts
+            let traceRun = runSimulation opts capacity
             (txs, snaps) <- analyseRun (verbosity opts) traceRun
             writeCSV h opts capacity txs snaps
             when (verbosity opts > 0) $ do
