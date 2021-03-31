@@ -22,9 +22,12 @@ in
 
     # Some you may need to get some other way.
     buildInputs = with pkgs.haskellPackages;
-      [ ghcid ];
+      [ ghcid
+        hspec-discover
+      ];
 
-    # Prevents cabal from choosing alternate plans, so that
+    # Setting it to true prevents cabal from choosing alternate plans, so that
     # *all* dependencies are provided by Nix.
-    exactDeps = true;
+    # However, this breaks hspec-discover so ¯\_(ツ)_/¯
+    exactDeps = false;
   }

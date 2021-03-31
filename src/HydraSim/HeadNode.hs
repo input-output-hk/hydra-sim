@@ -189,8 +189,7 @@ listener tracer hn = forever $
       multicast mpTracer mplex thisId ms
 
 txSender
-  :: (MonadAsync m, MonadSTM m,
-       Tx tx)
+  :: (MonadAsync m, Tx tx)
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 txSender tracer hn = case hcTxSendStrategy (hnConf hn) of
@@ -203,9 +202,7 @@ txSender tracer hn = case hcTxSendStrategy (hnConf hn) of
           atomically $ do
             s <- takeTMVar (hnState hn)
             if Set.size (hsTxsInflight s) < limit
-            then
-              putTMVar (hnState hn) $
-                s { hsTxsInflight = txRef tx `Set.insert` hsTxsInflight s }
+            then putTMVar (hnState hn) s { hsTxsInflight = txRef tx `Set.insert` hsTxsInflight s }
             else do
               putTMVar (hnState hn) s
               retry
@@ -215,9 +212,7 @@ txSender tracer hn = case hcTxSendStrategy (hnConf hn) of
 
 snDaemon
   :: forall m tx .
-     (MonadSTM m, MonadAsync m, Tx tx
-     , MonadTimer m
-     )
+     (MonadSTM m, MonadAsync m, Tx tx)
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 snDaemon tracer hn = case hcSnapshotStrategy conf of

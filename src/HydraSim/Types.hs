@@ -1,4 +1,5 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# OPTIONS_GHC -Wno-partial-fields #-}
 module HydraSim.Types
   ( -- * Nodes in the head protocol
     NodeId (..),

@@ -167,7 +167,7 @@ newMultiplexer label outBufferSize inBufferSize writeCapacity readCapacity = do
 
 -- | Connect two nodes.
 connect ::
-    (MonadSTM m, MonadTimer m, MonadAsync m) =>
+    (MonadSTM m, MonadTimer m) =>
     -- | Creates a pair of connected channels.
     --
     -- The channels are responsible for adding the delay caused by the messages
@@ -205,7 +205,6 @@ startMultiplexer tracer mp =
         concurrently
             (labelThisThread mp >> messageSender tracer mp)
             (labelThisThread mp >> messageReceiver tracer mp)
-  where
 
 labelThisThread :: MonadThread m => Multiplexer m a -> m ()
 labelThisThread mp = do
@@ -216,7 +215,7 @@ labelThisThread mp = do
  'messageSender' once the network interface has capacity.
 -}
 sendTo ::
-    (MonadSTM m, Sized a) =>
+    (MonadSTM m) =>
     Multiplexer m a ->
     NodeId ->
     a ->
@@ -230,7 +229,7 @@ sendTo mp peer ms =
  resources.
 -}
 multicast ::
-    (MonadSTM m, Sized a) =>
+    (MonadSTM m) =>
     Tracer m (TraceMultiplexer a) ->
     Multiplexer m a ->
     -- | 'NodeId' of this node
@@ -357,9 +356,7 @@ sendMessage tracer mp peer ms = do
 messageReceiver ::
     forall m a.
     ( MonadSTM m
-    , MonadThrow m
     , MonadTimer m
-    , Sized a
     ) =>
     Tracer m (TraceMultiplexer a) ->
     Multiplexer m a ->

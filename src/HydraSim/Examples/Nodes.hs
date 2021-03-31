@@ -2,9 +2,6 @@ module HydraSim.Examples.Nodes where
 
 import Control.Monad (zipWithM)
 import Control.Monad.Class.MonadAsync
-import Control.Monad.Class.MonadFork
-import Control.Monad.Class.MonadSTM
-import Control.Monad.Class.MonadSay
 import Control.Monad.Class.MonadThrow
 import Control.Monad.Class.MonadTime
 import Control.Monad.Class.MonadTimer
@@ -37,9 +34,6 @@ data NodeSpec = NodeSpec
 
 runNodes ::
     ( MonadTimer m
-    , MonadSTM m
-    , MonadSay m
-    , MonadFork m
     , MonadAsync m
     , MonadThrow m
     , MonadTime m
