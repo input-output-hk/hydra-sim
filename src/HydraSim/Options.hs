@@ -21,6 +21,22 @@ data Options = Options
     }
     deriving (Show)
 
+defaultOptions :: Options
+defaultOptions =
+    Options
+        { regions = [FrankfurtAWS, FrankfurtAWS, FrankfurtAWS]
+        , networkCapacity = [500, 1000, 2000, 3000, 4000, 5000]
+        , txType = Simple
+        , concurrency = 1
+        , numberTxs = 50
+        , snapStrategy = SnapAfter 1
+        , baselineSnapshots = [NoSnapshots]
+        , asigTime = (0.00015, 0.000010, 0.00085)
+        , output = "out.csv"
+        , discardEdges = 0
+        , verbosity = 1
+        }
+
 cli :: Parser Options
 cli =
     Options
@@ -29,7 +45,7 @@ cli =
             auto
             ( short 'b'
                 <> long "bandwidth"
-                <> value [500, 1000, 2000, 3000, 4000, 5000]
+                <> value (networkCapacity defaultOptions)
                 <> help "Network bandwidth (inbound and outbound) of each node, in kbits/s. It is "
             )
         <*> option
@@ -37,20 +53,20 @@ cli =
             ( short 't'
                 <> long "txType"
                 <> metavar "Plutus | Simple"
-                <> value Simple
+                <> value (txType defaultOptions)
                 <> help "Types of transactions to send."
             )
         <*> option
             auto
             ( short 'c'
                 <> long "concurrency"
-                <> value 1
+                <> value (concurrency defaultOptions)
                 <> help "Determines how many transaction any node will send before older transactions are confirmed."
             )
         <*> option
             auto
             ( short 'n'
-                <> value 50
+                <> value (numberTxs defaultOptions)
                 <> help "Number of transactions each node will send."
             )
         <*> option
@@ -58,39 +74,39 @@ cli =
             ( long "snapshots"
                 <> help "Sets the strategy for when to create snapshots"
                 <> metavar "NoSnapshots | SnapAfter N"
-                <> value (SnapAfter 1)
+                <> value (snapStrategy defaultOptions)
             )
         <*> option
             auto
             ( long "baseline-snapshots"
                 <> help "Sets the strategy for when to create snapshots"
                 <> metavar "NoSnapshots | SnapAfter N"
-                <> value [NoSnapshots]
+                <> value (baselineSnapshots defaultOptions)
             )
         <*> option
             auto
             ( long "aggregate-signature-time"
                 <> help "time (in seconds) for MSig operations (signing, aggregating, validating)"
-                <> value (0.00015, 0.000010, 0.00085)
+                <> value (asigTime defaultOptions)
                 <> metavar "(T_SIGN, T_AGGREGATE, T_VERIFY)"
             )
         <*> strOption
             ( short 'o'
                 <> long "output"
                 <> help "Write output to CSV file"
-                <> value "out.csv"
+                <> value (output defaultOptions)
             )
         <*> option
             auto
             ( long "discard-edges"
                 <> help "When writing data for confirmation time, discard the first and last N samples (allow for warmup/cooldown)"
                 <> metavar "N"
-                <> value 0
+                <> value (discardEdges defaultOptions)
             )
         <*> option
             auto
             ( short 'v'
                 <> long "verbosity"
-                <> value 1
+                <> value (verbosity defaultOptions)
                 <> help "How much to print on the command line. Set it to 4 or more to print debug messages."
             )
