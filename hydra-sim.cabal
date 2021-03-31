@@ -79,7 +79,9 @@ library
     HydraSim.Multiplexer
     HydraSim.Multiplexer.Exception
     HydraSim.Multiplexer.Trace
+    HydraSim.Options
     HydraSim.ProtocolFunctions
+    HydraSim.Run
     HydraSim.Sized
     HydraSim.Trace
     HydraSim.Tx.Class
@@ -91,6 +93,7 @@ library
                      , contra-tracer
                      , io-sim
                      , io-sim-classes
+                     , optparse-applicative
                      , random
                      , time
   ghc-options:
@@ -122,7 +125,7 @@ test-suite tests
   build-depends:
       base
     , hspec
---    , hydra-sim -any
+    , hydra-sim -any
   build-tool-depends:
     hspec-discover:hspec-discover
   ghc-options:

@@ -10,100 +10,13 @@ import HydraSim.Analyse
 import HydraSim.Examples.Baselines
 import HydraSim.Examples.Channels
 import HydraSim.Examples.Nodes
+import HydraSim.Options
+import HydraSim.run
 import HydraSim.Types
 import Numeric.Natural
 import Options.Applicative
 import System.Directory (doesFileExist)
 import System.IO
-
-data CLI = CLI
-    { regions :: [AWSCenters]
-    , networkCapacity :: [Natural]
-    , txType :: Txs
-    , concurrency :: Natural
-    , numberTxs :: Natural
-    , snapStrategy :: SnapStrategy
-    , baselineSnapshots :: [SnapStrategy]
-    , asigTime :: (Double, Double, Double)
-    , output :: FilePath
-    , discardEdges :: Int
-    , verbosity :: Natural
-    }
-    deriving (Show)
-
-cli :: Parser CLI
-cli =
-    CLI
-        <$> some (argument auto (metavar "NVirginiaAWS | OhioAWS | NCaliforniaAWS | OregonAWS | CanadaAWS | IrelandAWS | LondonAWS | FrankfurtAWS | TokyoAWS | SeoulAWS | SingaporeAWS | SydneyAWS | MumbaiAWS | SaoPauloAWS | GL10"))
-        <*> option
-            auto
-            ( short 'b'
-                <> long "bandwidth"
-                <> value [500, 1000, 2000, 3000, 4000, 5000]
-                <> help "Network bandwidth (inbound and outbound) of each node, in kbits/s. It is "
-            )
-        <*> option
-            auto
-            ( short 't'
-                <> long "txType"
-                <> metavar "Plutus | Simple"
-                <> value Simple
-                <> help "Types of transactions to send."
-            )
-        <*> option
-            auto
-            ( short 'c'
-                <> long "concurrency"
-                <> value 1
-                <> help "Determines how many transaction any node will send before older transactions are confirmed."
-            )
-        <*> option
-            auto
-            ( short 'n'
-                <> value 50
-                <> help "Number of transactions each node will send."
-            )
-        <*> option
-            auto
-            ( long "snapshots"
-                <> help "Sets the strategy for when to create snapshots"
-                <> metavar "NoSnapshots | SnapAfter N"
-                <> value (SnapAfter 1)
-            )
-        <*> option
-            auto
-            ( long "baseline-snapshots"
-                <> help "Sets the strategy for when to create snapshots"
-                <> metavar "NoSnapshots | SnapAfter N"
-                <> value [NoSnapshots]
-            )
-        <*> option
-            auto
-            ( long "aggregate-signature-time"
-                <> help "time (in seconds) for MSig operations (signing, aggregating, validating)"
-                <> value (0.00015, 0.000010, 0.00085)
-                <> metavar "(T_SIGN, T_AGGREGATE, T_VERIFY)"
-            )
-        <*> strOption
-            ( short 'o'
-                <> long "output"
-                <> help "Write output to CSV file"
-                <> value "out.csv"
-            )
-        <*> option
-            auto
-            ( long "discard-edges"
-                <> help "When writing data for confirmation time, discard the first and last N samples (allow for warmup/cooldown)"
-                <> metavar "N"
-                <> value 0
-            )
-        <*> option
-            auto
-            ( short 'v'
-                <> long "verbosity"
-                <> value 1
-                <> help "How much to print on the command line. Set it to 4 or more to print debug messages."
-            )
 
 data Datum = Datum
     { dCapacity :: Natural
@@ -198,17 +111,7 @@ main = do
                             , dValue = showt confTime
                             }
 
-            let specs = flip map (regions opts) $ \center ->
-                    NodeSpec
-                        { nodeRegion = center
-                        , nodeNetworkCapacity = fromIntegral capacity
-                        , nodeTxs = txType opts
-                        , nodeTxConcurrency = fromIntegral $ concurrency opts
-                        , nodeTxNumber = fromIntegral $ numberTxs opts
-                        , nodeSnapStrategy = snapStrategy opts
-                        , nodeASigTime = secondsToDiffTimeTriplet $ asigTime opts
-                        }
-                traceRun = runSimTrace $ runNodes specs dynamicTracer
+            let traceRun = runSimulation opts
             (txs, snaps) <- analyseRun (verbosity opts) traceRun
             writeCSV h opts capacity txs snaps
             when (verbosity opts > 0) $ do
@@ -231,13 +134,7 @@ main = do
     percent :: Double -> Double -> String
     percent x y = concat [" (", show $ x / y * 100, "%)"]
 
-secondsToDiffTime :: Double -> DiffTime
-secondsToDiffTime = picosecondsToDiffTime . round . (* 1e12)
-
-secondsToDiffTimeTriplet :: (Double, Double, Double) -> (DiffTime, DiffTime, DiffTime)
-secondsToDiffTimeTriplet (a, b, c) = (secondsToDiffTime a, secondsToDiffTime b, secondsToDiffTime c)
-
-writeCSV :: Handle -> CLI -> Natural -> [TxConfirmed] -> [SnConfirmed] -> IO ()
+writeCSV :: Handle -> Options -> Natural -> [TxConfirmed] -> [SnConfirmed] -> IO ()
 writeCSV h opts capacity txs snaps = do
     hPutStrLn h $
         csvLine
@@ -291,7 +188,7 @@ showCenterList centers = intercalate "-" $ map show centers
 csvHeader :: String
 csvHeader = "bandwidth,txtype,conc,regions,node,clustersize,t,snapsize,object,value"
 
-csvLine :: CLI -> Datum -> String
+csvLine :: Options -> Datum -> String
 csvLine opts dat =
     intercalate
         ","
