@@ -9,11 +9,12 @@ import Test.QuickCheck
 spec :: Spec
 spec = describe "Hydra Simulation" $ do
     describe "Simple Protocol w/o Conflicts" $ do
-        it "correctly confirms all transactions" $ property confirmsAllTransactions
+        it "correctly confirms all transactions in snapshots" $ property confirmsAllTransactionsInSnapshots
 
-confirmsAllTransactions ::
+confirmsAllTransactionsInSnapshots ::
     Positive (Small Integer) -> Bool
-confirmsAllTransactions (Positive (Small numTxs)) =
+confirmsAllTransactionsInSnapshots (Positive (Small numTxs)) =
     let capacity = 10 :: Integer
         traceRun = runSimulation defaultOptions{numberTxs = fromInteger numTxs} capacity
-     in length (confirmedTxs (selectTraceHydraEvents DontShowDebugMessages traceRun)) == fromInteger (numTxs * 3)
+        confirmedTxsInSnapshots = sum $ txsInConfSnap <$> confirmedSnapshots (selectTraceHydraEvents DontShowDebugMessages traceRun)
+     in confirmedTxsInSnapshots == fromInteger (numTxs * 3)
