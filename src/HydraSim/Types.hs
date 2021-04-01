@@ -96,7 +96,7 @@ data SnapStrategy =
   -- | After a number of transactions have been confirmed, a snapshot is
   -- created.
   | SnapAfter Int
-  deriving (Show, Read)
+  deriving (Eq, Show, Read)
 
 -- Multi-sig functionality
 data Tx tx => MS tx = MS {
