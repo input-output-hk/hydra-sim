@@ -126,6 +126,7 @@ test-suite tests
       base
     , hspec
     , hydra-sim -any
+    , QuickCheck -any
   build-tool-depends:
     hspec-discover:hspec-discover
   ghc-options:

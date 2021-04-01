@@ -4,13 +4,16 @@ import HydraSim.Analyse
 import HydraSim.Options
 import HydraSim.Run
 import Test.Hspec
+import Test.QuickCheck
 
 spec :: Spec
-spec = describe "Hydra Simulation with 3 nodes" $ do
-    it "correctly confirms all transactions" $ do
-        let capacity :: Int
-            capacity = 10
+spec = describe "Hydra Simulation" $ do
+    describe "Simple Protocol w/o Conflicts" $ do
+        it "correctly confirms all transactions" $ property confirmsAllTransactions
 
-            traceRun = runSimulation defaultOptions capacity
-
-        length (confirmedTxs (selectTraceHydraEvents DontShowDebugMessages traceRun)) `shouldBe` fromIntegral (numberTxs defaultOptions * 3)
+confirmsAllTransactions ::
+    Positive (Small Integer) -> Bool
+confirmsAllTransactions (Positive (Small numTxs)) =
+    let capacity = 10 :: Integer
+        traceRun = runSimulation defaultOptions{numberTxs = fromInteger numTxs} capacity
+     in length (confirmedTxs (selectTraceHydraEvents DontShowDebugMessages traceRun)) == fromInteger (numTxs * 3)
