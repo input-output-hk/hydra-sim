@@ -24,7 +24,6 @@ import Control.Monad.Class.MonadTime
 import Control.Monad.IOSim
 import Control.Tracer
 import Data.Dynamic
-import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Set (Set)
@@ -62,9 +61,9 @@ selectTraceHydraEvents showDebugMessages = go
             case x of
                 HydraDebug _ ->
                     if showDebugMessages == ShowDebugMessages
-                        then (HTrace t tlab tid x) : go trace
+                        then HTrace t tlab tid x : go trace
                         else go trace
-                _ -> (HTrace t tlab tid x) : go trace
+                _ -> HTrace t tlab tid x : go trace
     go (Trace _t tid Nothing (EventLog e) _trace)
         | Just (x :: TraceHydraEvent MockTx) <- fromDynamic e =
             error $
@@ -105,33 +104,30 @@ analyseRun verbosity fullTrace = do
         nUnconfirmedTxs =
             length $
                 filter
-                    ( \tx -> case tx of
-                        TxConfirmed _ _ _ -> False
+                    ( \case
+                        TxConfirmed{} -> False
                         TxUnconfirmed _ _ -> True
                     )
                     confTxs
         nUnconfirmedSnaps =
             length $
                 filter
-                    ( \tx -> case tx of
-                        SnConfirmed _ _ _ _ -> False
-                        SnUnconfirmed _ _ _ -> True
+                    ( \case
+                        SnConfirmed{} -> False
+                        SnUnconfirmed{} -> True
                     )
                     confSnaps
     when (totalTxs /= txsInSnaps) $
         warn $
-            intercalate
-                " "
+            unwords
                 ["Only", show txsInSnaps, "of", show totalTxs, " txs were included in snapshots"]
     when (nUnconfirmedTxs > 0) $
         warn $
-            intercalate
-                " "
+            unwords
                 ["There were", show nUnconfirmedTxs, "unconfirmed transactions."]
     when (nUnconfirmedSnaps > 0) $
         warn $
-            intercalate
-                " "
+            unwords
                 ["There were", show nUnconfirmedSnaps, "unconfirmed snapshots."]
     when (verbosity > 0) $ do
         putStrLn $ "Processed " ++ show totalTxs ++ " transactions."
@@ -144,12 +140,12 @@ analyseRun verbosity fullTrace = do
     warn s = setSGR [SetColor Foreground Vivid Red] >> putStrLn s >> setSGR [Reset]
 
 nodesInTrace :: [HTrace s] -> Set ThreadLabel
-nodesInTrace = (Set.delete "main") . Set.fromList . map hNode
+nodesInTrace = Set.delete "main" . Set.fromList . map hNode
 
-eventsPerNode :: [HTrace s] -> Map ThreadLabel ([HTrace s])
+eventsPerNode :: [HTrace s] -> Map ThreadLabel [HTrace s]
 eventsPerNode ts =
     let nodes = Set.toList $ nodesInTrace ts
-     in Map.fromList [(node, filter (((== node) . hNode)) ts) | node <- nodes]
+     in Map.fromList [(node, filter ((== node) . hNode) ts) | node <- nodes]
 
 data TxConfirmed
     = -- | Transaction, created at time t, got confirmed at time deltaT
@@ -167,7 +163,7 @@ data SnConfirmed
 
 txsInConfSnap :: SnConfirmed -> Int
 txsInConfSnap (SnConfirmed _ n _ _) = n
-txsInConfSnap (SnUnconfirmed _ _ _) = 0
+txsInConfSnap SnUnconfirmed{} = 0
 
 tps :: [TxConfirmed] -> Double
 tps txs0 = tps' (filterConfirmedTxs txs0)
@@ -190,20 +186,20 @@ avgSnapSize sns0 =
     (sum . map getSnapSize $ sns) / fromIntegral (length sns)
   where
     getSnapSize (SnConfirmed _ n _ _) = fromIntegral n
-    getSnapSize (SnUnconfirmed _ _ _) = error "Unconfirmed snapshot in avgSnapSize"
+    getSnapSize SnUnconfirmed{} = error "Unconfirmed snapshot in avgSnapSize"
     sns = filterConfirmedSnaps sns0
     filterConfirmedSnaps =
         filter
             ( \snap -> case snap of
-                SnConfirmed _ _ _ _ -> True
-                SnUnconfirmed _ _ _ -> False
+                SnConfirmed{} -> True
+                SnUnconfirmed{} -> False
             )
 
 filterConfirmedTxs :: [TxConfirmed] -> [TxConfirmed]
 filterConfirmedTxs =
     filter
         ( \tx -> case tx of
-            TxConfirmed _ _ _ -> True
+            TxConfirmed{} -> True
             TxUnconfirmed _ _ -> False
         )
 
