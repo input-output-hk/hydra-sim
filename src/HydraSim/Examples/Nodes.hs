@@ -9,6 +9,8 @@ import Control.Tracer
 import HydraSim.Examples.Channels
 import HydraSim.Examples.Txs
 import HydraSim.HeadNode
+import qualified HydraSim.HeadNode.CoordinatedProtocolHandler as CoordinatedProtocolHandler
+import qualified HydraSim.HeadNode.SimpleProtocolHandler as SimpleProtocolHandler
 import HydraSim.MSig.Mock
 import HydraSim.Sized
 import HydraSim.Trace
@@ -29,6 +31,7 @@ data NodeSpec = NodeSpec
     , nodeTxConcurrency :: Int
     , nodeSnapStrategy :: SnapStrategy
     , nodeASigTime :: (DiffTime, DiffTime, DiffTime)
+    , nodeHeadProtocolFlavor :: ProtocolFlavor
     }
     deriving (Show)
 
@@ -56,6 +59,10 @@ runNodes nodeSpecs tracer = do
                 )
          in SendTxs (nodeTxConcurrency nspec) $
                 [txFun (TxId $ nNodes * j + i) | j <- [0 .. nodeTxNumber nspec -1]]
+    selectProtocol nspec =
+        case nodeHeadProtocolFlavor nspec of
+            CoordinatedVanilla -> CoordinatedProtocolHandler.handleMessage
+            Vanilla -> SimpleProtocolHandler.handleMessage
     createNode i nspec = do
         let nodeConf =
                 NodeConf
@@ -64,6 +71,7 @@ runNodes nodeSpecs tracer = do
                     , hcMSig = simpleMsig (nodeASigTime nspec)
                     , hcLeaderFun = \(SnapN s) -> NodeId (s `mod` nNodes)
                     , hcSnapshotStrategy = nodeSnapStrategy nspec
+                    , hcProtocolHandler = selectProtocol nspec
                     }
             rate = kBitsPerSecond (nodeNetworkCapacity nspec)
         node <- newNode nodeConf rate rate

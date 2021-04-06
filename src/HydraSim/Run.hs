@@ -19,6 +19,7 @@ runSimulation opts capacity =
                 , nodeTxNumber = fromIntegral $ numberTxs opts
                 , nodeSnapStrategy = snapStrategy opts
                 , nodeASigTime = secondsToDiffTimeTriplet $ asigTime opts
+                , nodeHeadProtocolFlavor = protocolFlavor opts
                 }
      in runSimTrace $ runNodes specs dynamicTracer
 

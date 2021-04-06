@@ -15,11 +15,13 @@ module HydraSim.Types
     Snap (..), emptySnap,
     -- * strategies
     TxSendStrategy (..), SnapStrategy (..),
+    ProtocolFlavor(..),
     -- * Head protocol
     HeadProtocol (..),
     Decision (..),
     SendMessage (..),
     HStateTransformer,
+    ProtocolHandler,
     -- * Traces
     TraceProtocolEvent (..)
   ) where
@@ -98,6 +100,14 @@ data SnapStrategy =
   | SnapAfter Int
   deriving (Eq, Show, Read)
 
+-- |The "flavor" of Head protocol to run in the simulation.
+data ProtocolFlavor =
+  -- | Simple protocol without conflict resolution as exposed in ICAR paper
+    Vanilla
+  -- | Coordinated protocol w/o conflict
+  | CoordinatedVanilla
+  deriving (Eq, Show, Read)
+  
 -- Multi-sig functionality
 data Tx tx => MS tx = MS {
   ms_sig_tx :: SKey -> tx -> DelayedComp Sig,
@@ -115,7 +125,9 @@ data Tx tx => NodeConf tx = NodeConf {
   hcMSig :: MS tx,
   -- | Determine who is responsible to create which snapshot.
   hcLeaderFun :: SnapN -> NodeId,
-  hcSnapshotStrategy :: SnapStrategy
+  hcSnapshotStrategy :: SnapStrategy,
+  -- | Which protocol to use
+  hcProtocolHandler :: ProtocolHandler tx
   }
 
 data Tx tx => HState tx = HState {
@@ -261,6 +273,9 @@ data SendMessage tx =
 --
 -- It takes a state and a message, and produces a 'Decision'
 type HStateTransformer tx = HState tx -> HeadProtocol tx -> Decision tx
+
+-- | A function that handles incoming messages for a node.
+type ProtocolHandler tx = NodeConf tx -> NodeId ->  HStateTransformer tx
 
 -- | Tracing how the node state changes as transactions are acknowledged, and
 -- snapshots are produced.

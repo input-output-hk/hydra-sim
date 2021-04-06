@@ -1,4 +1,10 @@
-module HydraSim.HeadNode.SimpleProtocolHandler (
+{- | Coordinated version of "Vanilla" Hydra Head protocol.
+
+In this version:
+
+* The nodes do not confirm individual transactions, only snapshots
+-}
+module HydraSim.HeadNode.CoordinatedProtocolHandler (
     handleMessage,
 ) where
 
@@ -17,6 +23,8 @@ handleMessage ::
     Tx tx => ProtocolHandler tx
 handleMessage conf _peer s (New tx)
     | isValid =
+        -- Transaction is valid w.r.t to confirmed UTXO set, we broadcast it to
+        -- all nodes.
         DecApply
             (validComp $> s)
             (TPTxNew (txRef tx) (hcNodeId conf))
@@ -38,71 +46,14 @@ handleMessage conf peer s (SigReqTx tx)
                 pure $
                     s
                         { hsTxsSig = Map.insert (txRef tx) (txObj (hsTxsSig s) peer tx) (hsTxsSig s)
-                        , hsUTxOSig = hsUTxOSig s `txApplyValid` tx
+                        -- we insert the tx in the signed tx map but actually we don't need to sign it
                         }
             )
             (TPTxSig (txRef tx) (hcNodeId conf))
-            ( do
-                sigma <- (ms_sig_tx . hcMSig $ conf) (hsSK s) tx
-                return $ SendTo peer (SigAckTx (txRef tx) sigma)
-            )
-    | otherwise = DecWait (void validComp)
+            (pure SendNothing)
+    | otherwise = DecWait (void validComp) -- TODO do we need to wait for validating here?
   where
     validComp = txValidate (hsUTxOConf s) tx
-    isValid = unComp validComp
-handleMessage conf peer s (SigAckTx txref sig)
-    -- assert that all the requirements are fulfilled
-    | Map.notMember txref (hsTxsSig s) =
-        DecInvalid (return ()) $ "Transaction " ++ show txref ++ " not found."
-    | txoIssuer txob /= hcNodeId conf =
-        DecInvalid (return ()) $ "Transaction " ++ show txref ++ " not issued by " ++ show (hcNodeId conf)
-    | sig `Set.member` txoS txob =
-        DecInvalid (return ()) $ "Transition " ++ show txref ++ " already signed with " ++ show sig
-    | otherwise =
-        DecApply
-            (pure $ s{hsTxsSig = Map.insert txref txob' (hsTxsSig s)})
-            (TPTxAck txref peer)
-            ( if Set.size (txoS txob') < Set.size (hsVKs s)
-                then pure SendNothing
-                else do
-                    asig <- (ms_asig_tx . hcMSig $ conf) (txoTx txob') (hsVKs s) (txoS txob')
-                    return $ Multicast (SigConfTx txref asig)
-            )
-  where
-    txob = hsTxsSig s Map.! txref
-    txob' = txob{txoS = sig `Set.insert` txoS txob}
-handleMessage conf _peer s (SigConfTx txref asig)
-    | Map.notMember txref (hsTxsSig s) =
-        DecInvalid (return ()) $ "Transaction " ++ show txref ++ " not found."
-    | not isValid =
-        DecInvalid
-            (void validComp)
-            ("Invalid aggregate signature " ++ show asig ++ ", " ++ show avk ++ " in SigConfTx")
-    | otherwise =
-        DecApply
-            ( do
-                void validComp
-                -- this is only to wait, we already guarded against the signature being
-                -- invalid. Note that here, even if the message is from us, we did not
-                -- yet check the aggregate signature, so we do have to perform the check
-                -- now.
-                let txsSig = Map.insert txref txob' (hsTxsSig s)
-                    txsConf = Map.insert txref txob' (hsTxsConf s)
-                pure $
-                    s
-                        { hsUTxOConf = hsUTxOConf s `txApplyValid` txoTx txob
-                        , hsTxsSig = txsSig
-                        , hsTxsConf = txsConf
-                        , hsTxsInflight = txref `Set.delete` hsTxsInflight s
-                        }
-            )
-            (TPTxConf txref)
-            (pure SendNothing)
-  where
-    avk = ms_avk $ hsVKs s
-    txob = hsTxsSig s Map.! txref
-    txob' = txob{txoSigma = Just asig}
-    validComp = (ms_verify_tx . hcMSig $ conf) avk (txoTx txob) asig
     isValid = unComp validComp
 handleMessage conf _peer s NewSn
     | hcLeaderFun conf snapN /= hcNodeId conf =
@@ -114,14 +65,16 @@ handleMessage conf _peer s NewSn
             (pure $ Multicast (SigReqSn snapN txSet))
   where
     snapN = nextSn (hsSnapNConf s)
-    txSet = Map.keysSet $ maxTxos (hsTxsConf s)
+    txSet = Map.keysSet $ maxTxos (hsTxsSig s) -- We snapshot maximal 'tip' of available txs all the (valid) transactions  we have seen so far
 handleMessage conf peer s (SigReqSn snapN txRefs)
     | snapN /= nextSn lastSn =
         DecInvalid (return ()) ("Did not expec snapshot " ++ show snapN ++ ", last was " ++ show lastSn)
     | hcLeaderFun conf snapN /= peer =
         DecInvalid (return ()) (show peer ++ " should not create snapshot " ++ show snapN)
     | hsSnapNConf s /= hsSnapNSig s = DecWait (return ())
-    | not (txRefs `Set.isSubsetOf` Map.keysSet (hsTxsConf s)) = DecWait (return ())
+    -- Check that the transactions in the snapshot are ones we have seen, else wait for them to
+    -- be announced
+    | not (txRefs `Set.isSubsetOf` Map.keysSet (hsTxsSig s)) = DecWait (return ())
     | otherwise =
         DecApply
             (return s')
@@ -206,6 +159,9 @@ handleMessage conf _peer s (SigConfSn snapN asig)
             { hsSnapNConf = snapN
             , hsSnapSig = snob'
             , hsSnapConf = snob
-            , hsTxsConf = hsTxsConf s Map.\\ reach (hsTxsConf s) (snoT snob')
             , hsTxsSig = hsTxsSig s Map.\\ reach (hsTxsSig s) (snoT snob')
             }
+handleMessage _ _ _ msg =
+    DecInvalid
+        (return ())
+        ("Trying to  handle message " ++ show msg ++ " but it is unsupported by coordinated vanilla protocol.")
