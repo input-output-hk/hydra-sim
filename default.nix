@@ -1,10 +1,11 @@
 { # Fetch the latest haskell.nix and import its default.nix
-  haskellNix ? import (builtins.fetchTarball "https://github.com/input-output-hk/haskell.nix/archive/ef4aef4ce2060dc1a41b2690df1f54f986e0f9ab.tar.gz") {}
+  haskellNix ? import (builtins.fetchTarball "https://github.com/input-output-hk/haskell.nix/archive/79b44e52c64624029360e488dcf091c46c4e989f.tar.gz") {}
 
 # haskell.nix provides access to the nixpkgs pins which are used by our CI,
 # hence you will be more likely to get cache hits when using these.
-# But you can also just use your own, e.g. '<nixpkgs>'.
-, nixpkgsSrc ? haskellNix.sources.nixpkgs-2003
+    # But you
+    can also just use your own, e.g. '<nixpkgs>'.
+, nixpkgsSrc ? haskellNix.sources.nixpkgs
 
 # haskell.nix provides some arguments to be passed to nixpkgs, including some
 # patches and also the haskell.nix functionality itself as an overlay.
@@ -19,5 +20,5 @@
     src = ./.;
   };
   # Specify the GHC version to use.
-  compiler-nix-name = "ghc8102"; # Not required for `stack.yaml` based projects.
+  compiler-nix-name = "ghc8104"; # Not required for `stack.yaml` based projects.
 }
