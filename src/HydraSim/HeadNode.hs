@@ -18,10 +18,9 @@ import           Control.Monad.Class.MonadTimer
 import           Control.Tracer
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import           Data.Time.Clock (DiffTime)
 import           HydraSim.Channel
 import           HydraSim.DelayedComp
-import           HydraSim.HeadNode.Handler (handleMessage)
+import           HydraSim.HeadNode.SimpleProtocolHandler (handleMessage)
 import           HydraSim.MSig.Mock
 import           HydraSim.Multiplexer
 import           HydraSim.Sized
@@ -105,7 +104,7 @@ startNode tracer hn = void $
                (labelThisThread nodeLabel >> snDaemon tracer hn)
   where
     mpTracer = contramap HydraMessage tracer
-    nodeLabel = (show . hcNodeId . hnConf $ hn)
+    nodeLabel = show . hcNodeId . hnConf $ hn
 
 labelThisThread :: MonadAsync m => String -> m ()
 labelThisThread nodeLabel = do
@@ -130,8 +129,7 @@ clientMessage
   -> HeadNode m tx
   -> HeadProtocol tx
   -> m ()
-clientMessage tracer hn message =
-  sendToSelf mpTracer (hnMultiplexer hn) (hcNodeId (hnConf hn)) message
+clientMessage tracer hn = sendToSelf mpTracer (hnMultiplexer hn) (hcNodeId (hnConf hn))
   where
     mpTracer = contramap HydraMessage tracer
 
@@ -142,9 +140,8 @@ listener
       Tx tx)
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
-listener tracer hn = forever $ do
-  atomically (getMessage mplex) >>= \(peer, ms) ->
-    applyMessage peer ms
+listener tracer hn = forever $
+  atomically (getMessage mplex) >>= uncurry applyMessage
 
   where
     mplex = hnMultiplexer hn
@@ -192,11 +189,10 @@ listener tracer hn = forever $ do
       multicast mpTracer mplex thisId ms
 
 txSender
-  :: (MonadAsync m, MonadSTM m,
-       Tx tx)
+  :: (MonadAsync m, Tx tx)
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
-txSender tracer hn = case (hcTxSendStrategy (hnConf hn)) of
+txSender tracer hn = case hcTxSendStrategy (hnConf hn) of
   SendNoTx -> return ()
   SendSingleTx tx -> clientMessage tracer hn (New tx)
   SendTxsDumb txs -> mapM_ (clientMessage tracer hn . New) txs
@@ -206,9 +202,7 @@ txSender tracer hn = case (hcTxSendStrategy (hnConf hn)) of
           atomically $ do
             s <- takeTMVar (hnState hn)
             if Set.size (hsTxsInflight s) < limit
-            then
-              putTMVar (hnState hn) $
-                s { hsTxsInflight = txRef tx `Set.insert` hsTxsInflight s }
+            then putTMVar (hnState hn) s { hsTxsInflight = txRef tx `Set.insert` hsTxsInflight s }
             else do
               putTMVar (hnState hn) s
               retry
@@ -218,9 +212,7 @@ txSender tracer hn = case (hcTxSendStrategy (hnConf hn)) of
 
 snDaemon
   :: forall m tx .
-     (MonadSTM m, MonadAsync m, Tx tx
-     , MonadTimer m
-     )
+     (MonadSTM m, MonadAsync m, Tx tx)
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 snDaemon tracer hn = case hcSnapshotStrategy conf of
@@ -231,8 +223,8 @@ snDaemon tracer hn = case hcSnapshotStrategy conf of
       waitForOurTurn lastSn = do
         s <- readTMVar (hnState hn)
         let snapN = hsSnapNConf s
-        if ( Map.size (hsTxsConf s) >= n)
-           && ((hcLeaderFun conf) (nextSn snapN) == hcNodeId conf)
+        if Map.size (hsTxsConf s) >= n
+           && hcLeaderFun conf (nextSn snapN) == hcNodeId conf
            -- to prevent filling our inbox with duplicate NewSn messages:
            && snapN >= lastSn
           then return $ nextSn snapN
