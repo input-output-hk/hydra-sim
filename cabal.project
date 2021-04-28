@@ -1,6 +1,7 @@
 packages: .
 
 -- Always show detailed output for tests
+tests: True
 test-show-details: direct
 
 source-repository-package
