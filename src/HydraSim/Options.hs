@@ -47,29 +47,33 @@ cli =
                 auto
                 ( short 'b'
                     <> long "bandwidth"
-                    <> value (networkCapacity defaultOptions)
                     <> help "Network bandwidth (inbound and outbound) of each node, in kbits/s. It is "
+                    <> value (networkCapacity defaultOptions)
+                    <> showDefault
                 )
             <*> option
                 auto
                 ( short 't'
                     <> long "txType"
                     <> metavar "Plutus | Simple"
-                    <> value (txType defaultOptions)
                     <> help "Types of transactions to send."
+                    <> value (txType defaultOptions)
+                    <> showDefault
                 )
             <*> option
                 auto
                 ( short 'c'
                     <> long "concurrency"
-                    <> value (concurrency defaultOptions)
                     <> help "Determines how many transaction any node will send before older transactions are confirmed."
+                    <> value (concurrency defaultOptions)
+                    <> showDefault
                 )
             <*> option
                 auto
                 ( short 'n'
-                    <> value (numberTxs defaultOptions)
                     <> help "Number of transactions each node will send."
+                    <> value (numberTxs defaultOptions)
+                    <> showDefault
                 )
             <*> option
                 auto
@@ -77,6 +81,7 @@ cli =
                     <> help "Sets the strategy for when to create snapshots"
                     <> metavar "NoSnapshots | SnapAfter N"
                     <> value (snapStrategy defaultOptions)
+                    <> showDefault
                 )
             <*> option
                 auto
@@ -84,6 +89,7 @@ cli =
                     <> help "Sets the strategy for when to create snapshots"
                     <> metavar "NoSnapshots | SnapAfter N"
                     <> value (baselineSnapshots defaultOptions)
+                    <> showDefault
                 )
             <*> option
                 auto
@@ -91,6 +97,7 @@ cli =
                     <> help "Sets the flavor of the head protocol to use by nodes"
                     <> metavar "Vanilla | CoordinatedVanilla"
                     <> value (protocolFlavor defaultOptions)
+                    <> showDefault
                 )
             <*> option
                 auto
@@ -98,12 +105,14 @@ cli =
                     <> help "time (in seconds) for MSig operations (signing, aggregating, validating)"
                     <> value (asigTime defaultOptions)
                     <> metavar "(T_SIGN, T_AGGREGATE, T_VERIFY)"
+                    <> showDefault
                 )
             <*> strOption
                 ( short 'o'
                     <> long "output"
                     <> help "Write output to CSV file"
                     <> value (output defaultOptions)
+                    <> showDefault
                 )
             <*> option
                 auto
@@ -111,11 +120,13 @@ cli =
                     <> help "When writing data for confirmation time, discard the first and last N samples (allow for warmup/cooldown)"
                     <> metavar "N"
                     <> value (discardEdges defaultOptions)
+                    <> showDefault
                 )
             <*> option
                 auto
                 ( short 'v'
                     <> long "verbosity"
-                    <> value (verbosity defaultOptions)
                     <> help "How much to print on the command line. Set it to 4 or more to print debug messages."
+                    <> value (verbosity defaultOptions)
+                    <> showDefault
                 )
