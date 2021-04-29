@@ -20,7 +20,6 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import           HydraSim.Channel
 import           HydraSim.DelayedComp
-import           HydraSim.HeadNode.SimpleProtocolHandler (handleMessage)
 import           HydraSim.MSig.Mock
 import           HydraSim.Multiplexer
 import           HydraSim.Sized
@@ -148,14 +147,15 @@ listener tracer hn = forever $
     mpTracer = contramap HydraMessage tracer
     protocolTracer = contramap HydraProtocol tracer
     hydraDebugTracer = contramap HydraDebug tracer
-    thisId = hcNodeId (hnConf hn)
+    nodeConf = hnConf hn
+    thisId = hcNodeId nodeConf
     applyMessage :: NodeId -> HeadProtocol tx -> m ()
     applyMessage peer ms = do
       traceWith hydraDebugTracer ("applyMessage " ++ show peer
                               ++ " " ++ show ms)
       state <- atomically $ takeTMVar (hnState hn)
       traceWith hydraDebugTracer (" state = " ++ show state)
-      case handleMessage (hnConf hn) peer state ms of
+      case hcProtocolHandler nodeConf nodeConf peer state ms of
         DecApply stateUpdate trace ms' -> do
           -- 'runComp' advances the time by the amount the handler takes,
           -- and unwraps the result
