@@ -135,6 +135,7 @@ analyseRun verbosity fullTrace = do
         putStrLn $ "Processed " ++ show totalTxs ++ " transactions."
         putStrLn $ "Made " ++ show totalSnaps ++ " snapshots."
         putStrLn $ "Transaction throughput (tx per second): " ++ show (tps confTxs)
+        putStrLn $ "Snapshot throughput (tx in snaps per second): " ++ show (tpsSnap confSnaps)
         putStrLn $ "Average tx confirmation time: " ++ show (avgConfTime confTxs)
         putStrLn $ "Average snapshot size: " ++ show (avgSnapSize confSnaps)
     return (confTxs, confSnaps)
@@ -175,6 +176,19 @@ tps txs0 = tps' (filterConfirmedTxs txs0)
         let Time endTime = maximum [dt `addTime` t | TxConfirmed _ t dt <- txs]
          in fromIntegral (length txs) / diffTimeToSeconds endTime
 
+-- |Computes the number of transactions per second confirmed via snapshots
+tpsSnap :: [SnConfirmed] -> Double
+tpsSnap sns0 = tps' (filterConfirmedSnaps sns0)
+  where
+    tps' [] = 0
+    tps' sns =
+        let Time endTime = maximum [dt `addTime` t | SnConfirmed _ _ t dt <- sns]
+         in fromIntegral (sum $ map numTxSnapshot sns) / diffTimeToSeconds endTime
+
+numTxSnapshot :: SnConfirmed -> Int
+numTxSnapshot (SnConfirmed _ i _ _) = i
+numTxSnapshot SnUnconfirmed{} = 0
+
 avgConfTime :: [TxConfirmed] -> DiffTime
 avgConfTime txs0 = average (map getConfTime txs)
   where
@@ -189,12 +203,14 @@ avgSnapSize sns0 =
     getSnapSize (SnConfirmed _ n _ _) = fromIntegral n
     getSnapSize SnUnconfirmed{} = error "Unconfirmed snapshot in avgSnapSize"
     sns = filterConfirmedSnaps sns0
-    filterConfirmedSnaps =
-        filter
-            ( \snap -> case snap of
-                SnConfirmed{} -> True
-                SnUnconfirmed{} -> False
-            )
+
+filterConfirmedSnaps :: [SnConfirmed] -> [SnConfirmed]
+filterConfirmedSnaps =
+    filter
+        ( \snap -> case snap of
+            SnConfirmed{} -> True
+            SnUnconfirmed{} -> False
+        )
 
 average :: Fractional p => [p] -> p
 average [] = 0

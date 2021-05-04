@@ -46,7 +46,7 @@ handleMessage conf peer s (SigReqTx tx)
                 pure $
                     s
                         { hsTxsSig = Map.insert (txRef tx) (txObj (hsTxsSig s) peer tx) (hsTxsSig s)
-                        -- we insert the tx in the signed tx map but actually we don't need to sign it
+                        , hsTxsConf = Map.insert (txRef tx) (txObj (hsTxsConf s) peer tx) (hsTxsConf s)
                         }
             )
             (TPTxSig (txRef tx) (hcNodeId conf))
@@ -160,6 +160,7 @@ handleMessage conf _peer s (SigConfSn snapN asig)
             , hsSnapSig = snob'
             , hsSnapConf = snob
             , hsTxsSig = hsTxsSig s Map.\\ reach (hsTxsSig s) (snoT snob')
+            , hsTxsConf = hsTxsConf s Map.\\ reach (hsTxsConf s) (snoT snob')
             }
 handleMessage _ _ _ msg =
     DecInvalid
