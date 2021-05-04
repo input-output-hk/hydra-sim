@@ -130,6 +130,8 @@ test-suite tests
     , hspec
     , hydra-sim -any
     , QuickCheck -any
+    , io-sim-classes -any
+    , io-sim -any
   build-tool-depends:
     hspec-discover:hspec-discover
   ghc-options:
