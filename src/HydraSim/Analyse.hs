@@ -15,6 +15,7 @@ module HydraSim.Analyse (
     selectTraceHydraEvents,
     tps,
     diffTimeToSeconds,
+    avgConfTime,
 ) where
 
 import Control.Exception (throw)
@@ -173,17 +174,19 @@ tps txs0 = tps' (filterConfirmedTxs txs0)
         let Time endTime = maximum [dt `addTime` t | TxConfirmed _ t dt <- txs]
          in fromIntegral (length txs) / diffTimeToSeconds endTime
 
-avgConfTime :: [TxConfirmed] -> DiffTime
+avgConfTime :: [TxConfirmed] -> Maybe DiffTime
+avgConfTime [] = Nothing
 avgConfTime txs0 =
-    (sum . map getConfTime $ txs) / fromIntegral (length txs)
+    Just $ (sum . map getConfTime $ txs) / fromIntegral (length txs)
   where
     getConfTime (TxConfirmed _ _ dt) = dt
     getConfTime (TxUnconfirmed _ _) = error "Unconfirmed tx in avgConfTime"
     txs = filterConfirmedTxs txs0
 
-avgSnapSize :: [SnConfirmed] -> Double
+avgSnapSize :: [SnConfirmed] -> Maybe Double
+avgSnapSize [] = Nothing
 avgSnapSize sns0 =
-    (sum . map getSnapSize $ sns) / fromIntegral (length sns)
+    Just $ (sum . map getSnapSize $ sns) / fromIntegral (length sns)
   where
     getSnapSize (SnConfirmed _ n _ _) = fromIntegral n
     getSnapSize SnUnconfirmed{} = error "Unconfirmed snapshot in avgSnapSize"

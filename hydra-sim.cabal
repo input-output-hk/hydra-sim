@@ -120,6 +120,7 @@ test-suite tests
   import: project-config
   hs-source-dirs: test
   other-modules:
+    HydraSim.AnalyseSpec
     HydraSim.NodesSpec
     HydraSim.Arbitraries
   main-is: Main.hs
