@@ -275,7 +275,7 @@ data SendMessage tx =
 type HStateTransformer tx = HState tx -> HeadProtocol tx -> Decision tx
 
 -- | A function that handles incoming messages for a node.
-type ProtocolHandler tx = NodeConf tx -> NodeId ->  HStateTransformer tx
+type ProtocolHandler tx = NodeConf tx -> NodeId -> HStateTransformer tx
 
 -- | Tracing how the node state changes as transactions are acknowledged, and
 -- snapshots are produced.

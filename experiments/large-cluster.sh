@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # A simpler experiment with larger number of nodes
 mkdir -p csv pdf
 
