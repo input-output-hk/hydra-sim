@@ -16,6 +16,7 @@ module HydraSim.Analyse (
     tps,
     diffTimeToSeconds,
     avgConfTime,
+    avgSnapSize,
 ) where
 
 import Control.Exception (throw)
@@ -174,19 +175,16 @@ tps txs0 = tps' (filterConfirmedTxs txs0)
         let Time endTime = maximum [dt `addTime` t | TxConfirmed _ t dt <- txs]
          in fromIntegral (length txs) / diffTimeToSeconds endTime
 
-avgConfTime :: [TxConfirmed] -> Maybe DiffTime
-avgConfTime [] = Nothing
-avgConfTime txs0 =
-    Just $ (sum . map getConfTime $ txs) / fromIntegral (length txs)
+avgConfTime :: [TxConfirmed] -> DiffTime
+avgConfTime txs0 = average (map getConfTime txs)
   where
     getConfTime (TxConfirmed _ _ dt) = dt
     getConfTime (TxUnconfirmed _ _) = error "Unconfirmed tx in avgConfTime"
     txs = filterConfirmedTxs txs0
 
-avgSnapSize :: [SnConfirmed] -> Maybe Double
-avgSnapSize [] = Nothing
+avgSnapSize :: [SnConfirmed] -> Double
 avgSnapSize sns0 =
-    Just $ (sum . map getSnapSize $ sns) / fromIntegral (length sns)
+    average (map getSnapSize sns)
   where
     getSnapSize (SnConfirmed _ n _ _) = fromIntegral n
     getSnapSize SnUnconfirmed{} = error "Unconfirmed snapshot in avgSnapSize"
@@ -197,6 +195,10 @@ avgSnapSize sns0 =
                 SnConfirmed{} -> True
                 SnUnconfirmed{} -> False
             )
+
+average :: Fractional p => [p] -> p
+average [] = 0
+average l = sum l / fromIntegral (length l)
 
 filterConfirmedTxs :: [TxConfirmed] -> [TxConfirmed]
 filterConfirmedTxs =
