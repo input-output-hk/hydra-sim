@@ -155,13 +155,15 @@ handleMessage conf _peer s (SigConfSn snapN asig)
     validComp = (ms_verify_sn . hcMSig $ conf) avk (snapN, snoO snob) asig
     isValid = unComp validComp
     s' =
-        s
-            { hsSnapNConf = snapN
-            , hsSnapSig = snob'
-            , hsSnapConf = snob
-            , hsTxsSig = hsTxsSig s Map.\\ reach (hsTxsSig s) (snoT snob')
-            , hsTxsConf = hsTxsConf s Map.\\ reach (hsTxsConf s) (snoT snob')
-            }
+        let reachableTxs = reach (hsTxsSig s) (snoT snob')
+         in s
+                { hsSnapNConf = snapN
+                , hsSnapSig = snob'
+                , hsSnapConf = snob
+                , hsTxsSig = hsTxsSig s Map.\\ reachableTxs
+                , hsTxsConf = hsTxsConf s Map.\\ reach (hsTxsConf s) (snoT snob')
+                , hsTxsInflight = hsTxsInflight s Set.\\ Map.keysSet reachableTxs
+                }
 handleMessage _ _ _ msg =
     DecInvalid
         (return ())
