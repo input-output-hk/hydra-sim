@@ -61,7 +61,7 @@ common project-config
     -Wunused-packages
     -- TODO: check what deprecated functions should be replaced with
     -Wno-deprecations
-                     
+
 library
   import: project-config
   hs-source-dirs:      src
@@ -100,7 +100,22 @@ library
   ghc-options:
     -haddock
 
-executable hydra-sim
+executable hydra-tail-simulation
+  import: project-config
+  hs-source-dirs:      src/Hydra/Tail/
+  main-is:             Simulation.hs
+  build-depends:       base
+                     , contra-tracer
+                     , hydra-sim -any
+                     , io-sim
+                     , io-sim-classes
+                     , time
+  ghc-options:
+         -O2
+         -threaded
+         -rtsopts
+
+executable hydra-head-simulation
   import: project-config
   hs-source-dirs:      exe
   main-is:             Main.hs

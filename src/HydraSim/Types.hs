@@ -26,19 +26,22 @@ module HydraSim.Types
     TraceProtocolEvent (..)
   ) where
 
-import           Data.List (intercalate)
-import           Data.Map (Map)
+import Data.List
+    ( intercalate )
+import Data.Map
+    ( Map )
 import qualified Data.Map as Map
-import           Data.Set (Set)
+import Data.Set
+    ( Set )
 import qualified Data.Set as Set
-import           HydraSim.DelayedComp
-import           HydraSim.MSig.Mock
-import           HydraSim.Sized
-import           HydraSim.Tx.Class
+import HydraSim.DelayedComp
+import HydraSim.MSig.Mock
+import HydraSim.Sized
+import HydraSim.Tx.Class
 
 -- | Identifiers for nodes in the head protocol.
-newtype NodeId = NodeId Int
-  deriving (Show, Ord, Eq, Sized)
+newtype NodeId = NodeId { getNodeId :: Int }
+  deriving (Show, Ord, Eq, Sized, Num, Enum)
 
 -- | Local transaction objects
 data Tx tx => TxO tx = TxO
@@ -107,7 +110,7 @@ data ProtocolFlavor =
   -- | Coordinated protocol w/o conflict
   | CoordinatedVanilla
   deriving (Eq, Show, Read)
-  
+
 -- Multi-sig functionality
 data Tx tx => MS tx = MS {
   ms_sig_tx :: SKey -> tx -> DelayedComp Sig,
