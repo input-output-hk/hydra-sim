@@ -105,11 +105,15 @@ executable hydra-tail-simulation
   hs-source-dirs:      src/Hydra/Tail/
   main-is:             Simulation.hs
   build-depends:       base
+                     , base16
+                     , containers
                      , contra-tracer
+                     , cryptohash-md5
                      , generic-lens
                      , hydra-sim -any
                      , io-sim
                      , io-sim-classes
+                     , text
                      , time
   ghc-options:
          -O2
