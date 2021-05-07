@@ -106,6 +106,7 @@ executable hydra-tail-simulation
   main-is:             Simulation.hs
   build-depends:       base
                      , contra-tracer
+                     , generic-lens
                      , hydra-sim -any
                      , io-sim
                      , io-sim-classes
