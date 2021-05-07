@@ -5,6 +5,8 @@ module Main where
 
 import Prelude
 
+import Control.Exception
+    ( throw )
 import Control.Monad
     ( forM, forever, replicateM_, void )
 import Control.Monad.Class.MonadAsync
@@ -18,9 +20,11 @@ import Control.Monad.Class.MonadTime
 import Control.Monad.Class.MonadTimer
     ( MonadTimer, threadDelay )
 import Control.Monad.IOSim
-    ( IOSim, Trace (..), TraceEvent (..), runSimTrace )
+    ( IOSim, ThreadLabel, Trace (..), TraceEvent (..), runSimTrace )
 import Control.Tracer
     ( Tracer (..), contramap )
+import Data.Dynamic
+    ( fromDynamic )
 import Data.Generics.Internal.VL.Lens
     ( (^.) )
 import Data.Generics.Labels
@@ -138,6 +142,7 @@ main = do
 
 
 data Msg = Msg
+  deriving (Show)
 
 instance Sized Msg where
   size = \case
@@ -146,6 +151,7 @@ instance Sized Msg where
 data TraceTailSimulation
   = TraceServer TraceServer
   | TraceClient TraceClient
+  deriving (Show)
 
 --
 -- Client
@@ -192,6 +198,7 @@ runClient tracer serverId slotLength Client{multiplexer, options} =
 
 data TraceClient
   = TraceClientMultiplexer (TraceMultiplexer Msg)
+  deriving (Show)
 
 --
 -- Server
@@ -211,7 +218,7 @@ newServer
   -> m (Server m)
 newServer identifier options@ServerOptions{region,writeCapacity,readCapacity} = do
   multiplexer <- newMultiplexer
-    ("server-" <> show (getNodeId identifier))
+    "server"
     outboundBufferSize
     inboundBufferSize
     writeCapacity
@@ -231,6 +238,7 @@ runServer tracer Server{multiplexer} = do
 
 data TraceServer
   = TraceServerMultiplexer (TraceMultiplexer Msg)
+  deriving (Show)
 
 --
 -- Helpers
@@ -254,17 +262,28 @@ connectClient client server =
     ( server ^. #identifier, server ^. #multiplexer )
 
 foldTraceEvents
-  :: (TraceEvent -> st -> st)
+  :: ((ThreadLabel, TraceTailSimulation) -> st -> st)
   -> st
   -> Trace a
   -> st
 foldTraceEvents fn st = \case
-  Trace _time _threadId _threadLabel event next ->
-    foldTraceEvents fn (fn event st) next
+  Trace _time threadId mThreadLabel (EventLog event) next ->
+    let
+      st' = case (fromDynamic event, mThreadLabel) of
+        (Just traceSimulation, Nothing) ->
+          error $ "unlabeled thread " <> show threadId <> " in " <> show traceSimulation
+        (Just traceSimulation, Just threadLabel) ->
+          fn (threadLabel, traceSimulation) st
+        (Nothing, _) ->
+          st
+     in
+      foldTraceEvents fn st' next
+  Trace _time _threadId _threadLabel _event next ->
+    foldTraceEvents fn st next
   TraceMainReturn{} ->
     st
-  TraceMainException{} ->
-    st
+  TraceMainException _ e _ ->
+    throw e
   TraceDeadlock{} ->
     st
 
