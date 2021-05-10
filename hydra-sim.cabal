@@ -113,6 +113,7 @@ executable hydra-tail-simulation
                      , hydra-sim -any
                      , io-sim
                      , io-sim-classes
+                     , random
                      , text
                      , time
   ghc-options:

@@ -46,6 +46,8 @@ import Data.Time.Clock
     ( DiffTime, picosecondsToDiffTime )
 import GHC.Generics
     ( Generic )
+import System.Random
+    ( StdGen, mkStdGen, randomR )
 
 import qualified Control.Monad.IOSim as IOSim
 import qualified Data.Text as T
@@ -271,11 +273,14 @@ instance Exception UnexpectedServerMsg
 
 type ClientId = NodeId
 
+data ClientState = Online | Offline deriving (Generic, Show)
+
 data Client m = Client
   { multiplexer :: Multiplexer m Msg
   , identifier  :: ClientId
   , region :: AWSCenters
   , options :: ClientOptions
+  , generator :: StdGen
   } deriving (Generic)
 
 newClient :: MonadSTM m => ClientId -> ClientOptions -> m (Client m)
@@ -286,11 +291,12 @@ newClient identifier options@ClientOptions{regions,writeCapacity,readCapacity} =
     inboundBufferSize
     writeCapacity
     readCapacity
-  return Client { multiplexer, identifier, region, options }
+  return Client { multiplexer, identifier, region, options, generator }
  where
   outboundBufferSize = 1000
   inboundBufferSize = 1000
   region = getRegion regions identifier
+  generator = mkStdGen (getNodeId identifier)
 
 runClient
   :: forall m. (MonadAsync m, MonadTimer m, MonadThrow m)
@@ -300,24 +306,41 @@ runClient
   -> DiffTime
   -> Client m
   -> m ()
-runClient tracer getSubscribers serverId slotLength Client{multiplexer, identifier, options} =
+runClient tracer getSubscribers serverId slotLength Client{multiplexer, identifier, options, generator} =
   concurrently_
     (startMultiplexer (contramap TraceClientMultiplexer tracer) multiplexer)
-    (withLabel ("Main: "<> show identifier) $ clientMain 0)
+    (withLabel ("Main: "<> show identifier) $ clientMain 0 Offline generator)
  where
-  clientMain :: SlotNo -> m ()
-  clientMain currentSlot = do
-    traceWith tracer $ TraceClientWakeUp currentSlot
-    let n = fromIntegral (options ^. #transactionRate)
-    forM_ [1..n] $ \i -> do
-      subscribers <- getSubscribers identifier
-      let msg = NewTx (mockTx identifier currentSlot i) identifier subscribers
-      sendTo multiplexer serverId msg
-    threadDelay slotLength >> clientMain (succ currentSlot)
+  clientMain :: SlotNo -> ClientState -> StdGen -> m ()
+  clientMain currentSlot st g = do
+    case getNewState g st of
+      (Online, g' ) -> do
+        traceWith tracer $ TraceClientIsOnline currentSlot
+        let n = fromIntegral (options ^. #transactionRate)
+        forM_ [1..n] $ \i -> do
+          subscribers <- getSubscribers identifier
+          let msg = NewTx (mockTx identifier currentSlot i) identifier subscribers
+          sendTo multiplexer serverId msg
+        threadDelay slotLength >> clientMain (succ currentSlot) Online g'
+
+      (Offline, g') -> do
+        traceWith tracer $ TraceClientIsOffline currentSlot
+        threadDelay slotLength
+        clientMain (succ currentSlot) Offline g'
+   where
+    getNewState :: StdGen -> ClientState -> (ClientState, StdGen)
+    getNewState (randomR (1, 100) -> (p, g')) = \case
+      Online | (p % 100) > options ^. #offlineLikelyhood ->
+        (Offline, g')
+      Offline | (p % 100) > options ^. #onlineLikelyhood ->
+        (Online, g')
+      same ->
+        (same, g')
 
 data TraceClient
   = TraceClientMultiplexer (TraceMultiplexer Msg)
-  | TraceClientWakeUp SlotNo
+  | TraceClientIsOnline SlotNo
+  | TraceClientIsOffline SlotNo
   deriving (Show)
 
 --
