@@ -423,11 +423,11 @@ runClient tracer getSubscribers serverId slotLength Client{multiplexer, identifi
  where
   clientMain :: SlotNo -> StdGen -> m ()
   clientMain currentSlot (randomR (1, 100) -> (pOnline, g))
-    | (pOnline % 100) > options ^. #onlineLikelyhood = do
+    | (pOnline % 100) <= options ^. #onlineLikelyhood = do
         traceWith tracer $ TraceClientWakeUp currentSlot
         sendTo multiplexer serverId Pull
         let (pSubmit, g') = randomR (1, 100) g
-        if (pSubmit % 100) > options ^. #submitLikelyhood then do
+        if (pSubmit % 100) <= options ^. #submitLikelyhood then do
           subscribers <- getSubscribers identifier
           let msg = NewTx (mockTx identifier currentSlot) subscribers
           sendTo multiplexer serverId msg
