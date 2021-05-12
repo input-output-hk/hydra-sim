@@ -9,7 +9,7 @@ import Prelude
 import Control.Exception
     ( Exception, throw )
 import Control.Monad
-    ( forM, forM_, forever, void )
+    ( forM, forM_, void )
 import Control.Monad.Class.MonadAsync
     ( MonadAsync, async, concurrently_, forConcurrently_ )
 import Control.Monad.Class.MonadFork
@@ -24,6 +24,10 @@ import Control.Monad.Class.MonadTimer
     ( MonadTimer, threadDelay )
 import Control.Monad.IOSim
     ( IOSim, ThreadLabel, Trace (..), TraceEvent (..), runSimTrace )
+import Control.Monad.Trans.Class
+    ( lift )
+import Control.Monad.Trans.State.Strict
+    ( StateT, execStateT, get, put )
 import Control.Tracer
     ( Tracer (..), contramap, traceWith )
 import Crypto.Hash.MD5
@@ -38,6 +42,8 @@ import Data.Generics.Internal.VL.Lens
     ( (^.) )
 import Data.Generics.Labels
     ()
+import Data.Map.Strict
+    ( Map )
 import Data.Ratio
     ( (%) )
 import Data.Text
@@ -50,6 +56,7 @@ import System.Random
     ( StdGen, mkStdGen, randomR )
 
 import qualified Control.Monad.IOSim as IOSim
+import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 
@@ -116,9 +123,9 @@ data ClientOptions = ClientOptions
 
 runSimulation :: Options -> Trace ()
 runSimulation Options{serverOptions,clientOptions,numberOfClients,slotLength,duration} = runSimTrace $ do
-  let serverId = 0
-  server <- newServer serverId serverOptions
-  clients <- forM [1..fromInteger numberOfClients] $ \clientId -> do
+  let (serverId, clientIds) = (0, [1..fromInteger numberOfClients])
+  server <- newServer serverId clientIds serverOptions
+  clients <- forM clientIds $ \clientId -> do
     client <- newClient clientId clientOptions
     client <$ connectClient client server
   void $ async $ concurrently_
@@ -145,7 +152,7 @@ main = do
   opts :: Options
   opts = Options
     { duration = 10
-    , numberOfClients = 10
+    , numberOfClients = 1000
     , slotLength = 1
 
     , serverOptions = ServerOptions
@@ -173,11 +180,27 @@ main = do
 -- mere message broker between many producers and many consumers (the clients), linked together
 -- via a single message broker (the server).
 data Msg
-  = NewTx MockTx ClientId [ClientId]
+  --
+  -- ↓↓↓ Client messages ↓↓↓
+  --
+  = NewTx MockTx [ClientId]
   -- ^ A new transaction, sent to some peer. The current behavior of this simulation
   -- consider that each client is only sending to one single peer. Later, we probably
   -- want to challenge this assumption by analyzing real transaction patterns from the
   -- main chain and model this behavior.
+
+  | Pull
+  -- ^ Sent when waking up to catch up on messages received when offline.
+
+  | Connect
+  -- ^ Client connections and disconnections are modelled using 0-sized messages.
+
+  | Disconnect
+  -- ^ Client connections and disconnections are modelled using 0-sized messages.
+
+  --
+  -- ↓↓↓ Server messages ↓↓↓
+  --
 
   | NotifyTx MockTx
   -- ^ The server will notify concerned clients with transactions they have subscribed to.
@@ -190,8 +213,14 @@ data Msg
 
 instance Sized Msg where
   size = \case
-    NewTx tx _sender clients ->
+    NewTx tx clients ->
       sizeOfHeader + size tx + sizeOfAddress * fromIntegral (length clients)
+    Pull ->
+      sizeOfHeader
+    Connect{} ->
+      0
+    Disconnect{} ->
+      0
     NotifyTx tx ->
       sizeOfHeader + size tx
     AckTx txId ->
@@ -211,63 +240,96 @@ data TraceTailSimulation
 
 type ServerId = NodeId
 
+data ClientState = Online | Offline
+  deriving (Generic, Show)
+
 data Server m = Server
   { multiplexer :: Multiplexer m Msg
   , identifier  :: ServerId
   , region :: AWSCenters
   , options :: ServerOptions
+  , clients :: Map ClientId (ClientState, [Msg])
   } deriving (Generic)
 
 newServer
   :: MonadSTM m
   => ServerId
+  -> [ClientId]
   -> ServerOptions
   -> m (Server m)
-newServer identifier options@ServerOptions{region,writeCapacity,readCapacity} = do
+newServer identifier clientIds options@ServerOptions{region,writeCapacity,readCapacity} = do
   multiplexer <- newMultiplexer
     "server"
     outboundBufferSize
     inboundBufferSize
     writeCapacity
     readCapacity
-  return Server { multiplexer, identifier, region, options }
+  return Server { multiplexer, identifier, region, options, clients }
  where
   outboundBufferSize = 1000
   inboundBufferSize = 1000
+  clients = Map.fromList [ (clientId, (Offline, [])) | clientId <- clientIds ]
 
 runServer
   :: forall m. (MonadAsync m, MonadTimer m, MonadThrow m)
   => Tracer m TraceServer
   -> Server m
   -> m ()
-runServer tracer Server{multiplexer} = do
+runServer tracer server0@Server{multiplexer} = do
   concurrently_
     (startMultiplexer (contramap TraceServerMultiplexer tracer) multiplexer)
-    (withLabel "Main: Server" serverMain)
+    (withLabel "Main: Server" $ serverMain server0)
  where
-  serverMain :: m ()
-  serverMain = forever $ do
+  serverMain :: Server m -> m ()
+  serverMain server@Server{clients} = do
     atomically (getMessage multiplexer) >>= \case
-      (_, NewTx tx sender subscribers) -> do
+      (clientId, NewTx tx subscribers) -> do
         void $ runComp (txValidate Set.empty tx)
-        forM_ subscribers $ \subscriber ->
-          sendTo multiplexer subscriber (NotifyTx tx)
-        sendTo multiplexer sender (AckTx $ txRef tx)
+        clients' <- flip execStateT clients $ do
+          forM_ subscribers $ \subscriber -> modifyM $ updateF clientId $ \case
+            (Offline, mailbox) -> do
+              let msg = NotifyTx tx
+              traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
+              pure $ Just (Offline, msg:mailbox)
+            same -> do
+              Just same <$ sendTo multiplexer subscriber (NotifyTx tx)
+        sendTo multiplexer clientId (AckTx $ txRef tx)
+        serverMain $ server { clients = clients' }
 
-      (nodeId, msg) ->
-        throwIO (UnexpectedServerMsg nodeId msg)
+      (clientId, Pull) -> do
+        clients' <- updateF clientId (\case
+          (st, mailbox) -> do
+            mapM_ (sendTo multiplexer clientId) (reverse mailbox)
+            pure $ Just (st, [])
+          ) clients
+        serverMain $ server { clients = clients' }
+
+      (clientId, Connect) -> do
+        let clients' = Map.update (\(_, mailbox) -> Just (Online, mailbox)) clientId clients
+        serverMain $ server { clients = clients' }
+
+      (clientId, Disconnect) -> do
+        let clients' = Map.update (\(_, mailbox) -> Just (Offline, mailbox)) clientId clients
+        serverMain $ server { clients = clients' }
+
+      (clientId, msg) ->
+        throwIO (UnexpectedServerMsg clientId msg)
 
 data TraceServer
   = TraceServerMultiplexer (TraceMultiplexer Msg)
+  | TraceServerStoreInMailbox ClientId Msg Int
   deriving (Show)
 
 data ServerMain = ServerMain deriving Show
 instance Exception ServerMain
 
-
 data UnexpectedServerMsg = UnexpectedServerMsg NodeId Msg
   deriving Show
 instance Exception UnexpectedServerMsg
+
+data UnknownClient = UnknownClient NodeId
+  deriving Show
+instance Exception UnknownClient
 
 --
 -- Client
@@ -315,10 +377,11 @@ runClient tracer getSubscribers serverId slotLength Client{multiplexer, identifi
   clientMain currentSlot (randomR (1, 100) -> (pOnline, g))
     | (pOnline % 100) > options ^. #onlineLikelyhood = do
         traceWith tracer $ TraceClientWakeUp currentSlot
+        sendTo multiplexer serverId Pull
         let (pSubmit, g') = randomR (1, 100) g
         if (pSubmit % 100) > options ^. #submitLikelyhood then do
           subscribers <- getSubscribers identifier
-          let msg = NewTx (mockTx identifier currentSlot) identifier subscribers
+          let msg = NewTx (mockTx identifier currentSlot) subscribers
           sendTo multiplexer serverId msg
         else
           pure ()
@@ -437,6 +500,27 @@ withLabel
 withLabel lbl action = do
   myThreadId >>= (`labelThread` lbl)
   action
+
+modifyM
+  :: Monad m
+  => (s -> m s)
+  -> StateT s m ()
+modifyM fn = do
+  get >>= lift . fn >>= put
+
+updateF
+  :: (Ord k, Applicative f)
+  => k
+  -> (v -> f (Maybe v))
+  -> Map k v
+  -> f (Map k v)
+updateF k fn =
+  Map.alterF (\case
+    Nothing ->
+      error "updateF: index out of range"
+    Just v ->
+      fn v
+  ) k
 
 foldTraceEvents
   :: ((ThreadLabel, TraceTailSimulation) -> st -> st)

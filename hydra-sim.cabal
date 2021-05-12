@@ -116,6 +116,7 @@ executable hydra-tail-simulation
                      , random
                      , text
                      , time
+                     , transformers
   ghc-options:
          -O2
          -threaded
