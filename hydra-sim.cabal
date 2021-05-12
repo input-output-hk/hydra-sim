@@ -88,36 +88,37 @@ library
     HydraSim.Tx.Class
     HydraSim.Tx.Mock
     HydraSim.Types
+
+    Hydra.Tail.Simulation
+    Hydra.Tail.Simulation.Options
+    Hydra.Tail.Simulation.Utils
+    Hydra.Tail.Simulation.MockTx
+    Hydra.Tail.Simulation.SlotNo
   build-depends:       base
+                     , base16
                      , ansi-terminal
                      , containers
                      , contra-tracer
+                     , cryptohash-md5
+                     , generic-lens
                      , io-sim
                      , io-sim-classes
                      , optparse-applicative
                      , random
+                     , safe
+                     , text
                      , time
+                     , transformers
   ghc-options:
     -haddock
 
 executable hydra-tail-simulation
   import: project-config
-  hs-source-dirs:      src/Hydra/Tail/
-  main-is:             Simulation.hs
+  hs-source-dirs:      exe/tail
+  main-is:             Main.hs
   build-depends:       base
-                     , base16
-                     , containers
-                     , contra-tracer
-                     , cryptohash-md5
-                     , generic-lens
                      , hydra-sim -any
-                     , io-sim
-                     , io-sim-classes
                      , pretty-simple
-                     , random
-                     , text
-                     , time
-                     , transformers
   ghc-options:
          -O2
          -threaded
@@ -125,7 +126,7 @@ executable hydra-tail-simulation
 
 executable hydra-head-simulation
   import: project-config
-  hs-source-dirs:      exe
+  hs-source-dirs:      exe/head
   main-is:             Main.hs
   build-depends:       base
                      , directory

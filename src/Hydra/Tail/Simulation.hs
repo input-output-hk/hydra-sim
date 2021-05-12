@@ -1,19 +1,16 @@
-{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedLabels #-}
 
-module Main where
+module Hydra.Tail.Simulation where
 
 import Prelude
 
 import Control.Exception
-    ( Exception, throw )
+    ( Exception )
 import Control.Monad
     ( forM, forM_, void )
 import Control.Monad.Class.MonadAsync
     ( MonadAsync, async, concurrently_, forConcurrently_ )
-import Control.Monad.Class.MonadFork
-    ( MonadThread, labelThread, myThreadId )
 import Control.Monad.Class.MonadSTM
     ( MonadSTM, atomically )
 import Control.Monad.Class.MonadThrow
@@ -23,21 +20,11 @@ import Control.Monad.Class.MonadTime
 import Control.Monad.Class.MonadTimer
     ( MonadTimer, threadDelay )
 import Control.Monad.IOSim
-    ( IOSim, ThreadLabel, Trace (..), TraceEvent (..), runSimTrace )
-import Control.Monad.Trans.Class
-    ( lift )
+    ( IOSim, ThreadLabel, Trace (..), runSimTrace )
 import Control.Monad.Trans.State.Strict
-    ( StateT, execStateT, get, put )
+    ( execStateT )
 import Control.Tracer
     ( Tracer (..), contramap, traceWith )
-import Crypto.Hash.MD5
-    ( hash )
-import Data.ByteString.Base16
-    ( encodeBase16 )
-import Data.Dynamic
-    ( fromDynamic )
-import Data.Function
-    ( (&) )
 import Data.Generics.Internal.VL.Lens
     ( (^.) )
 import Data.Generics.Labels
@@ -46,26 +33,33 @@ import Data.Map.Strict
     ( Map, (!) )
 import Data.Ratio
     ( (%) )
-import Data.Text
-    ( Text )
 import Data.Time.Clock
-    ( DiffTime, picosecondsToDiffTime )
+    ( DiffTime )
 import GHC.Generics
     ( Generic )
 import System.Random
     ( StdGen, mkStdGen, randomR )
-import Text.Pretty.Simple
-    ( pPrint )
 
 import qualified Control.Monad.IOSim as IOSim
 import qualified Data.Map.Strict as Map
-import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
+import qualified Data.Set as Set
 
+import Hydra.Tail.Simulation.MockTx
+    ( MockTx, mockTx )
+import Hydra.Tail.Simulation.Options
+    ( ClientOptions (..)
+    , NetworkCapacity (..)
+    , Options (..)
+    , ServerOptions (..)
+    )
+import Hydra.Tail.Simulation.SlotNo
+    ( SlotNo (..) )
+import Hydra.Tail.Simulation.Utils
+    ( foldTraceEvents, modifyM, updateF, withLabel )
 import HydraSim.Analyse
     ( diffTimeToSeconds )
 import HydraSim.DelayedComp
-    ( delayedComp, runComp )
+    ( runComp )
 import HydraSim.Examples.Channels
     ( AWSCenters (..), channel )
 import HydraSim.Multiplexer
@@ -73,55 +67,17 @@ import HydraSim.Multiplexer
 import HydraSim.Multiplexer.Trace
     ( TraceMultiplexer (..) )
 import HydraSim.Sized
-    ( Size (..), Sized (..) )
+    ( Sized (..) )
 import HydraSim.Tx.Class
     ( Tx (..) )
 import HydraSim.Types
     ( NodeId (..) )
 
-import qualified Data.Set as Set
 import qualified HydraSim.Multiplexer as Multiplexer
 
 --
 -- Simulation
 --
-
-data Options = Options
-  { numberOfClients :: Integer
-    -- ^ Total number of client
-  , slotLength :: DiffTime
-    -- ^ Slot length
-  , duration :: DiffTime
-    -- ^ How long to run the simulation (in simulation's time)
-  , serverOptions :: ServerOptions
-    -- ^ Options specific to the 'Server'
-  , clientOptions :: ClientOptions
-    -- ^ Options specific to each 'Client'
-  } deriving (Generic, Show)
-
-data ServerOptions = ServerOptions
-  { region :: AWSCenters
-    -- ^ 'Server' region
-  , readCapacity :: NetworkCapacity
-    -- ^ 'Server' network read capacity, in KBits/s
-  , writeCapacity :: NetworkCapacity
-    -- ^ 'Server' network write capacity, in KBits/s
-  } deriving (Generic, Show)
-
-data ClientOptions = ClientOptions
-  { regions :: [AWSCenters]
-    -- ^ Regions to spread each 'Client' across uniformly
-  , readCapacity :: NetworkCapacity
-    -- ^ Each 'Client' network read capacity, in KBits/s
-  , writeCapacity :: NetworkCapacity
-    -- ^ Each 'Client' network write capacity, in KBits/s
-  , onlineLikelyhood  :: Rational
-    -- ^ Likelyhood of an offline 'Client' to go online at the current slot.
-  , submitLikelyhood :: Rational
-    -- ^ Likelyhood of a 'Client' to submit a transaction at the current slot.
-    -- This models the behavior of clients that only go online to check on the
-    -- server state but not necessarily submit any transactions.
-  } deriving (Generic, Show)
 
 runSimulation :: Options -> Trace ()
 runSimulation Options{serverOptions,clientOptions,numberOfClients,slotLength,duration} = runSimTrace $ do
@@ -190,37 +146,8 @@ analyzeSimulation Options{duration} trace =
    in
     Analyze{totalTransactions, confirmedTransactions, realThroughput, maxThroughput}
 
-main :: IO ()
-main = do
-  let trace = runSimulation options
-  let analyze = analyzeSimulation options trace
-  pPrint options
-  pPrint analyze
- where
-  -- TODO: Get these from a command-line parser
-  options :: Options
-  options = Options
-    { duration = 10
-    , numberOfClients = 1000
-    , slotLength = 1
-
-    , serverOptions = ServerOptions
-      { region = LondonAWS
-      , readCapacity = kbitsPerSecond (1024*1024)
-      , writeCapacity = kbitsPerSecond (1024*1024)
-      }
-
-    , clientOptions = ClientOptions
-      { regions = [LondonAWS]
-      , readCapacity = kbitsPerSecond 512
-      , writeCapacity = kbitsPerSecond 512
-      , onlineLikelyhood = 50%100
-      , submitLikelyhood = 75%100
-      }
-    }
-
 --
--- Tail-Protocol
+-- (Simplified) Tail-Protocol
 --
 
 -- | Messages considered as part of the simplified Tail pre-protocol. We don't know exactly
@@ -448,95 +375,12 @@ data TraceClient
   deriving (Show)
 
 --
--- SlotNo
---
-
-newtype SlotNo = SlotNo Integer
-  deriving stock (Eq, Show)
-  deriving (Num, Enum) via Integer
-
---
--- MockTx
---
-
-data MockTx = MockTx
-  { txId :: TxRef MockTx
-  , numberOfOutputs :: Integer
-  } deriving (Eq, Ord, Show)
-
-instance Tx MockTx where
-  newtype TxRef MockTx = TxRef Text
-    deriving (Eq, Ord, Show)
-
-  newtype TxInput MockTx = TxInput ()
-    deriving (Eq, Ord, Show)
-
-  txRef = txId
-  txi _ = Set.empty
-  txo _ = Set.empty
-
-  txValidate _ = delayedComp True . validationTime
-  txSort = id
-
-instance Sized (TxRef MockTx) where
-  size = const 32
-
-instance Sized MockTx where
-  size MockTx{numberOfOutputs} =
-    150 + fromInteger (70 * numberOfOutputs)
-
--- TODO: Validation time should vary with the number of outputs?
-validationTime
-  :: MockTx
-  -> DiffTime
-validationTime =
-  const (picosecondsToDiffTime 4 * 1e8)
-
-mockTx
-  :: ClientId
-  -> SlotNo
-  -> MockTx
-mockTx clientId slotNo = MockTx
-  { txId =
-      -- NOTE: Arguably, we could want to keep this unobfuscasted
-      -- for debugging purpose. Though putting these elements in
-      -- the transaction 'body' might make more sense?
-      (show clientId <> show slotNo)
-      & encodeBase16 . hash . T.encodeUtf8 . T.pack
-      & TxRef
-  , numberOfOutputs =
-      1
-  }
-
---
--- NetworkCapacity
---
-
-data NetworkCapacity = NetworkCapacity
-  { rate :: Integer
-    -- ^ in KBits/s
-  , capacity :: Size -> DiffTime
-    -- ^ Measure time needed to transfer a payload of the given 'Size'
-  } deriving (Generic)
-
-instance Show NetworkCapacity where
-  showsPrec i NetworkCapacity{rate} =
-    showParen (i >= 10) $ showString (show rate <> " KBits/s")
-
-kbitsPerSecond :: Integer -> NetworkCapacity
-kbitsPerSecond rate =
-  NetworkCapacity{rate,capacity}
- where
-  capacity (Size bytes) =
-    fromIntegral bytes * fromRational (recip $ (1024 * toRational rate) / 8)
-
---
 -- Helpers
 --
 
 getRegion
   :: [AWSCenters]
-  -> ClientId
+  -> NodeId
   -> AWSCenters
 getRegion regions (NodeId i) =
   regions !! (i `mod` length regions)
@@ -561,61 +405,3 @@ mkGetSubscribers
 mkGetSubscribers clients (NodeId sender) = do
   let subscriber = NodeId $ max 1 (succ sender `mod` length clients)
   pure [subscriber]
-
-withLabel
-  :: MonadThread m
-  => String
-  -> m ()
-  -> m ()
-withLabel lbl action = do
-  myThreadId >>= (`labelThread` lbl)
-  action
-
-modifyM
-  :: Monad m
-  => (s -> m s)
-  -> StateT s m ()
-modifyM fn = do
-  get >>= lift . fn >>= put
-
-updateF
-  :: (Ord k, Applicative f)
-  => k
-  -> (v -> f (Maybe v))
-  -> Map k v
-  -> f (Map k v)
-updateF k fn =
-  Map.alterF (\case
-    Nothing ->
-      error "updateF: index out of range"
-    Just v ->
-      fn v
-  ) k
-
-foldTraceEvents
-  :: ((ThreadLabel, TraceTailSimulation) -> st -> st)
-  -> st
-  -> Trace a
-  -> st
-foldTraceEvents fn st = \case
-  Trace _time threadId mThreadLabel (EventLog event) next ->
-    let
-      st' = case (fromDynamic event, mThreadLabel) of
-        (Just traceSimulation, Nothing) ->
-          error $ "unlabeled thread " <> show threadId <> " in " <> show traceSimulation
-        (Just traceSimulation, Just threadLabel) ->
-          fn (threadLabel, traceSimulation) st
-        (Nothing, _) ->
-          st
-     in
-      foldTraceEvents fn st' next
-  Trace _time _threadId _threadLabel (EventThrow e) _next ->
-    throw e
-  Trace _time _threadId _threadLabel _event next ->
-    foldTraceEvents fn st next
-  TraceMainReturn{} ->
-    st
-  TraceMainException _ e _ ->
-    throw e
-  TraceDeadlock{} ->
-    st
