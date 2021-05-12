@@ -11,6 +11,8 @@ import Control.Exception
     ( throw )
 import Control.Monad.Class.MonadFork
     ( MonadThread, labelThread, myThreadId )
+import Control.Monad.Class.MonadTime
+    ( Time )
 import Control.Monad.IOSim
     ( ThreadLabel, Trace (..), TraceEvent (..) )
 import Control.Monad.Trans.Class
@@ -60,18 +62,18 @@ updateF k fn =
 
 foldTraceEvents
   :: forall a b st. (Typeable b, Show b)
-  => ((ThreadLabel, b) -> st -> st)
+  => ((ThreadLabel, Time, b) -> st -> st)
   -> st
   -> Trace a
   -> st
 foldTraceEvents fn st = \case
-  Trace _time threadId mThreadLabel (EventLog event) next ->
+  Trace time threadId mThreadLabel (EventLog event) next ->
     let
       st' = case (fromDynamic @b event, mThreadLabel) of
         (Just b, Nothing) ->
           error $ "unlabeled thread " <> show threadId <> " in " <> show b
         (Just b, Just threadLabel) ->
-          fn (threadLabel, b) st
+          fn (threadLabel, time, b) st
         (Nothing, _) ->
           st
      in

@@ -16,11 +16,13 @@ import Control.Monad.Class.MonadSTM
 import Control.Monad.Class.MonadThrow
     ( MonadThrow, throwIO )
 import Control.Monad.Class.MonadTime
-    ( MonadTime )
+    ( MonadTime, Time (..) )
 import Control.Monad.Class.MonadTimer
     ( MonadTimer, threadDelay )
 import Control.Monad.IOSim
     ( IOSim, ThreadLabel, Trace (..), runSimTrace )
+import Control.Monad.Trans.Class
+    ( lift )
 import Control.Monad.Trans.State.Strict
     ( execStateT )
 import Control.Tracer
@@ -34,7 +36,7 @@ import Data.Map.Strict
 import Data.Ratio
     ( (%) )
 import Data.Time.Clock
-    ( DiffTime )
+    ( DiffTime, picosecondsToDiffTime )
 import GHC.Generics
     ( Generic )
 import System.Random
@@ -51,6 +53,7 @@ import Hydra.Tail.Simulation.Options
     , NetworkCapacity (..)
     , Options (..)
     , ServerOptions (..)
+    , kbitsPerSecond
     )
 import Hydra.Tail.Simulation.SlotNo
     ( SlotNo (..) )
@@ -59,7 +62,7 @@ import Hydra.Tail.Simulation.Utils
 import HydraSim.Analyse
     ( diffTimeToSeconds )
 import HydraSim.DelayedComp
-    ( runComp )
+    ( DelayedComp, delayedComp, runComp )
 import HydraSim.Examples.Channels
     ( AWSCenters (..), channel )
 import HydraSim.Multiplexer
@@ -106,11 +109,7 @@ data Event
   deriving (Generic, Eq, Ord, Enum, Bounded)
 
 data Analyze = Analyze
-  { totalTransactions :: Integer
-    -- ^ Total transactions sent by all clients.
-  , confirmedTransactions  :: Integer
-    -- ^ Total transactions acknowledged by the server and fully received by clients.
-  , realThroughput :: Double
+  { realThroughput :: Double
     -- ^ Throughput measured from confirmed transactions.
   , maxThroughput :: Double
     -- ^ Throughput measured from total transactions.
@@ -124,12 +123,12 @@ analyzeSimulation Options{duration} trace =
         zero :: Map Event Integer
         zero = Map.fromList ((,0) <$> [minBound .. maxBound])
 
-        fn :: (ThreadLabel, TraceTailSimulation) -> Map Event Integer -> Map Event Integer
+        fn :: (ThreadLabel, Time, TraceTailSimulation) -> Map Event Integer -> Map Event Integer
         fn = \case
-          (_threadLabel, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId NewTx{}))) ->
+          (_threadLabel, _t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId NewTx{}))) ->
             Map.adjust (+1) ENewTx
 
-          (_threadLabel, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId AckTx{}))) ->
+          (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId AckTx{}))) | t < duration ->
             Map.adjust (+1) EAckTx
 
           _ ->
@@ -144,7 +143,7 @@ analyzeSimulation Options{duration} trace =
     maxThroughput =
       fromIntegral totalTransactions / diffTimeToSeconds duration
    in
-    Analyze{totalTransactions, confirmedTransactions, realThroughput, maxThroughput}
+    Analyze{realThroughput, maxThroughput}
 
 --
 -- (Simplified) Tail-Protocol
@@ -261,13 +260,15 @@ runServer tracer server0@Server{multiplexer} = do
       (clientId, NewTx tx subscribers) -> do
         void $ runComp (txValidate Set.empty tx)
         clients' <- flip execStateT clients $ do
-          forM_ subscribers $ \subscriber -> modifyM $ updateF clientId $ \case
-            (Offline, mailbox) -> do
-              let msg = NotifyTx tx
-              traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
-              pure $ Just (Offline, msg:mailbox)
-            same -> do
-              Just same <$ sendTo multiplexer subscriber (NotifyTx tx)
+          forM_ subscribers $ \subscriber -> do
+            lift $ runComp lookupSubscriber
+            modifyM $ updateF clientId $ \case
+              (Offline, mailbox) -> do
+                let msg = NotifyTx tx
+                traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
+                pure $ Just (Offline, msg:mailbox)
+              same -> do
+                Just same <$ sendTo multiplexer subscriber (NotifyTx tx)
         sendTo multiplexer clientId (AckTx $ txRef tx)
         serverMain $ server { clients = clients' }
 
@@ -289,6 +290,10 @@ runServer tracer server0@Server{multiplexer} = do
 
       (clientId, msg) ->
         throwIO (UnexpectedServerMsg clientId msg)
+
+lookupSubscriber :: DelayedComp ()
+lookupSubscriber =
+  delayedComp () (picosecondsToDiffTime 500*1e6) -- 500μs
 
 data TraceServer
   = TraceServerMultiplexer (TraceMultiplexer Msg)
@@ -321,13 +326,13 @@ data Client m = Client
   } deriving (Generic)
 
 newClient :: MonadSTM m => ClientId -> ClientOptions -> m (Client m)
-newClient identifier options@ClientOptions{regions,writeCapacity,readCapacity} = do
+newClient identifier options@ClientOptions{regions} = do
   multiplexer <- newMultiplexer
     ("client-" <> show (getNodeId identifier))
     outboundBufferSize
     inboundBufferSize
-    (capacity writeCapacity)
-    (capacity readCapacity)
+    (capacity $ kbitsPerSecond 512)
+    (capacity $ kbitsPerSecond 512)
   return Client { multiplexer, identifier, region, options, generator }
  where
   outboundBufferSize = 1000

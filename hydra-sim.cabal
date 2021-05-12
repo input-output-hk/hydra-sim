@@ -119,10 +119,7 @@ executable hydra-tail-simulation
   build-depends:       base
                      , hydra-sim -any
                      , pretty-simple
-  ghc-options:
-         -O2
-         -threaded
-         -rtsopts
+  ghc-options:         -O2 -threaded -rtsopts "-with-rtsopts=-T -N2"
 
 executable hydra-head-simulation
   import: project-config
@@ -135,10 +132,7 @@ executable hydra-head-simulation
                      , io-sim-classes
                      , optparse-applicative
                      , time
-  ghc-options:
-         -O2
-         -threaded
-         -rtsopts
+  ghc-options:         -O2 -threaded -rtsopts
 
 test-suite tests
   import: project-config

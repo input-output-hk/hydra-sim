@@ -81,7 +81,7 @@ durationOption :: Parser DiffTime
 durationOption = option (maybeReader readDiffTime) $ mempty
   <> long "duration"
   <> metavar "SECONDS"
-  <> value 60
+  <> value 30
   <> showDefault
   <> help "Duration in seconds of the entire simulation. Ideally large in front of --slot-length."
 
@@ -94,8 +94,6 @@ serverOptionsOption = ServerOptions
 clientOptionsOption :: Parser ClientOptions
 clientOptionsOption = ClientOptions
   <$> clientRegionsOption
-  <*> clientReadCapacityOption
-  <*> clientWriteCapacityOption
   <*> clientOnlineLikelyhoodOption
   <*> clientSubmitLikelyhoodOption
 
@@ -114,19 +112,15 @@ serverRegionOption =
 
 serverReadCapacityOption :: Parser NetworkCapacity
 serverReadCapacityOption =
-  networkCapacityOption Server Read (1024*1024)
+  networkCapacityOption Server Read (100*1024)
 
 serverWriteCapacityOption :: Parser NetworkCapacity
 serverWriteCapacityOption =
-  networkCapacityOption Server Write (1024*1024)
+  networkCapacityOption Server Write (100*1024)
 
 data ClientOptions = ClientOptions
   { regions :: [AWSCenters]
     -- ^ Regions to spread each 'Client' across uniformly
-  , readCapacity :: NetworkCapacity
-    -- ^ Each 'Client' network read capacity, in KBits/s
-  , writeCapacity :: NetworkCapacity
-    -- ^ Each 'Client' network write capacity, in KBits/s
   , onlineLikelyhood  :: Rational
     -- ^ Likelyhood of an offline 'Client' to go online at the current slot.
   , submitLikelyhood :: Rational
@@ -140,19 +134,11 @@ clientRegionsOption =
   -- FIXME: Somehow 'some' / 'many' are causing issues here probably due to lazyness?
   pure <$> regionOption Client
 
-clientReadCapacityOption :: Parser NetworkCapacity
-clientReadCapacityOption =
-  networkCapacityOption Client Read 512
-
-clientWriteCapacityOption :: Parser NetworkCapacity
-clientWriteCapacityOption =
-  networkCapacityOption Client Write 512
-
 clientOnlineLikelyhoodOption :: Parser Rational
 clientOnlineLikelyhoodOption = option auto $ mempty
   <> long "client-online-likelyhood"
   <> metavar "NUM%DEN"
-  <> value (1%2)
+  <> value (1%10)
   <> showDefault
   <> help "Likelyhood of a client to go online on the next slot."
 
