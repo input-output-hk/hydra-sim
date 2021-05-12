@@ -3,11 +3,12 @@
 {-# LANGUAGE TypeApplications #-}
 
 module Hydra.Tail.Simulation.Options
-  ( Options (..)
+  ( Command (..)
+  , parseCommand
+
+  , Options (..)
   , ClientOptions(..)
   , ServerOptions(..)
-  , parseOptions
-  , parserInfo
 
   , NetworkCapacity(..)
   , kbitsPerSecond
@@ -32,21 +33,31 @@ import HydraSim.Examples.Channels
 import HydraSim.Sized
     ( Size (..) )
 
-parseOptions :: IO Options
-parseOptions =
-  customExecParser (prefs showHelpOnEmpty) parserInfo
+data Command
+  = Prepare Options
+  | Run Options
+  deriving (Generic, Show)
 
-parserInfo :: ParserInfo Options
-parserInfo = info (helper <*> parser) $ mempty
-  <> progDesc "Hydra Tail Simulation"
+parseCommand :: IO Command
+parseCommand =
+  customExecParser (prefs showHelpOnEmpty) parserInfo
  where
-  parser =
-    Options
-      <$> numberOfClientsOption
-      <*> slotLengthOption
-      <*> durationOption
-      <*> serverOptionsOption
-      <*> clientOptionsOption
+  parser = subparser (prepareMod <> runMod)
+
+  parserInfo :: ParserInfo Command
+  parserInfo = info
+    (helper <*> parser)
+    (progDesc "Hydra Tail Simulation")
+
+prepareMod :: Mod CommandFields Command
+prepareMod = command "prepare" $ info
+  (helper <*> (Prepare <$> optionsParser))
+  (progDesc "Prepare client events for a simulation")
+
+runMod :: Mod CommandFields Command
+runMod = command "run" $ info
+  (helper <*> (Run <$> optionsParser))
+  (progDesc "Run a simulation given an event schedule")
 
 data Options = Options
   { numberOfClients :: Integer
@@ -61,13 +72,21 @@ data Options = Options
     -- ^ Options specific to each 'Client'
   } deriving (Generic, Show)
 
+optionsParser :: Parser Options
+optionsParser = Options
+  <$> numberOfClientsOption
+  <*> slotLengthOption
+  <*> durationOption
+  <*> serverOptionsOption
+  <*> clientOptionsOption
+
 numberOfClientsOption :: Parser Integer
 numberOfClientsOption = option auto $ mempty
-    <> long "number-of-clients"
-    <> metavar "INT"
-    <> value 1000
-    <> showDefault
-    <> help "Total / Maximum number of clients in the simulation."
+  <> long "number-of-clients"
+  <> metavar "INT"
+  <> value 1000
+  <> showDefault
+  <> help "Total / Maximum number of clients in the simulation."
 
 slotLengthOption :: Parser DiffTime
 slotLengthOption = option (maybeReader readDiffTime) $ mempty

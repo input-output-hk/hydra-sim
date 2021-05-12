@@ -1,3 +1,4 @@
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# OPTIONS_GHC -Wno-partial-fields #-}
 module HydraSim.Types
@@ -26,22 +27,29 @@ module HydraSim.Types
     TraceProtocolEvent (..)
   ) where
 
-import Data.List
-    ( intercalate )
-import Data.Map
-    ( Map )
-import qualified Data.Map as Map
-import Data.Set
-    ( Set )
-import qualified Data.Set as Set
 import HydraSim.DelayedComp
 import HydraSim.MSig.Mock
 import HydraSim.Sized
 import HydraSim.Tx.Class
 
+import Data.List
+    ( intercalate )
+import Data.Map
+    ( Map )
+import Data.Set
+    ( Set )
+import GHC.Generics
+    ( Generic )
+import Quiet
+    ( Quiet (..) )
+
+import qualified Data.Map as Map
+import qualified Data.Set as Set
+
 -- | Identifiers for nodes in the head protocol.
 newtype NodeId = NodeId { getNodeId :: Int }
-  deriving (Show, Ord, Eq, Sized, Num, Enum)
+  deriving (Generic, Ord, Eq, Sized, Num, Enum)
+  deriving Show via Quiet NodeId
 
 -- | Local transaction objects
 data Tx tx => TxO tx = TxO

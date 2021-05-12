@@ -1,5 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedLabels #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Hydra.Tail.Simulation where
 
@@ -8,7 +9,7 @@ import Prelude
 import Control.Exception
     ( Exception )
 import Control.Monad
-    ( forM, forM_, void )
+    ( foldM, forM, forM_, void )
 import Control.Monad.Class.MonadAsync
     ( MonadAsync, async, concurrently_, forConcurrently_ )
 import Control.Monad.Class.MonadSTM
@@ -24,11 +25,11 @@ import Control.Monad.IOSim
 import Control.Monad.Trans.Class
     ( lift )
 import Control.Monad.Trans.State.Strict
-    ( execStateT )
+    ( StateT, evalStateT, execStateT, runStateT, state )
 import Control.Tracer
     ( Tracer (..), contramap, traceWith )
 import Data.Generics.Internal.VL.Lens
-    ( (^.) )
+    ( view, (^.) )
 import Data.Generics.Labels
     ()
 import Data.Map.Strict
@@ -36,7 +37,7 @@ import Data.Map.Strict
 import Data.Ratio
     ( (%) )
 import Data.Time.Clock
-    ( DiffTime, picosecondsToDiffTime )
+    ( DiffTime, diffTimeToPicoseconds, picosecondsToDiffTime )
 import GHC.Generics
     ( Generic )
 import System.Random
@@ -58,7 +59,7 @@ import Hydra.Tail.Simulation.Options
 import Hydra.Tail.Simulation.SlotNo
     ( SlotNo (..) )
 import Hydra.Tail.Simulation.Utils
-    ( foldTraceEvents, modifyM, updateF, withLabel )
+    ( foldTraceEvents, forEach, modifyM, updateF, withLabel )
 import HydraSim.Analyse
     ( diffTimeToSeconds )
 import HydraSim.DelayedComp
@@ -82,8 +83,20 @@ import qualified HydraSim.Multiplexer as Multiplexer
 -- Simulation
 --
 
-runSimulation :: Options -> Trace ()
-runSimulation Options{serverOptions,clientOptions,numberOfClients,slotLength,duration} = runSimTrace $ do
+prepareSimulation :: MonadSTM m => Options -> m [Event]
+prepareSimulation Options{clientOptions,numberOfClients,slotLength,duration} = do
+  let clientIds = [1..fromInteger numberOfClients]
+  clients <- forM clientIds $ \clientId -> newClient clientId clientOptions
+  let getSubscribers = mkGetSubscribers clients
+  let maxSlotNo = diffTimeToPicoseconds duration `div` diffTimeToPicoseconds slotLength
+  let events = foldM
+        (\st currentSlot -> (st <>) <$> forEach (stepClient getSubscribers currentSlot))
+        mempty
+        [ SlotNo i | i <- [ 0 .. maxSlotNo ] ]
+  evalStateT events (Map.fromList $ zip (view #identifier <$> clients) clients)
+
+runSimulation :: Options -> [Event] -> Trace ()
+runSimulation Options{serverOptions,clientOptions,numberOfClients,slotLength,duration} events = runSimTrace $ do
   let (serverId, clientIds) = (0, [1..fromInteger numberOfClients])
   server <- newServer serverId clientIds serverOptions
   clients <- forM clientIds $ \clientId -> do
@@ -91,7 +104,7 @@ runSimulation Options{serverOptions,clientOptions,numberOfClients,slotLength,dur
     client <$ connectClient client server
   void $ async $ concurrently_
     (runServer trServer server)
-    (forConcurrently_ clients (runClient trClient (mkGetSubscribers clients) serverId slotLength))
+    (forConcurrently_ clients (runClient trClient events serverId slotLength))
   threadDelay duration
  where
   tracer :: Tracer (IOSim a) TraceTailSimulation
@@ -103,9 +116,9 @@ runSimulation Options{serverOptions,clientOptions,numberOfClients,slotLength,dur
   trServer :: Tracer (IOSim a) TraceServer
   trServer = contramap TraceServer tracer
 
-data Event
-  = ENewTx
-  | EAckTx
+data Metric
+  = NewTx_
+  | AckTx_
   deriving (Generic, Eq, Ord, Enum, Bounded)
 
 data Analyze = Analyze
@@ -120,24 +133,24 @@ analyzeSimulation Options{duration} trace =
   let
     events = foldTraceEvents fn zero trace
       where
-        zero :: Map Event Integer
+        zero :: Map Metric Integer
         zero = Map.fromList ((,0) <$> [minBound .. maxBound])
 
-        fn :: (ThreadLabel, Time, TraceTailSimulation) -> Map Event Integer -> Map Event Integer
+        fn :: (ThreadLabel, Time, TraceTailSimulation) -> Map Metric Integer -> Map Metric Integer
         fn = \case
           (_threadLabel, _t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId NewTx{}))) ->
-            Map.adjust (+1) ENewTx
+            Map.adjust (+1) NewTx_
 
           (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId AckTx{}))) | t < duration ->
-            Map.adjust (+1) EAckTx
+            Map.adjust (+1) AckTx_
 
           _ ->
             id
 
     totalTransactions =
-      events ! ENewTx
+      events ! NewTx_
     confirmedTransactions =
-      events ! EAckTx
+      events ! AckTx_
     realThroughput =
       fromIntegral confirmedTransactions / diffTimeToSeconds duration
     maxThroughput =
@@ -183,7 +196,7 @@ data Msg
 
   | AckTx (TxRef MockTx)
   -- ^ The server replies to each client submitting a transaction with an acknowledgement.
-  deriving (Show)
+  deriving (Generic, Show)
 
 instance Sized Msg where
   size = \case
@@ -202,6 +215,12 @@ instance Sized Msg where
    where
     sizeOfAddress = 57
     sizeOfHeader = 2
+
+data Event = Event
+  { slot :: SlotNo
+  , from :: ClientId
+  , msg :: Msg
+  } deriving (Generic, Show)
 
 data TraceTailSimulation
   = TraceServer TraceServer
@@ -343,36 +362,57 @@ newClient identifier options@ClientOptions{regions} = do
 runClient
   :: forall m. (MonadAsync m, MonadTimer m, MonadThrow m)
   => Tracer m TraceClient
-  -> (ClientId -> m [ClientId])
+  -> [Event]
   -> ServerId
   -> DiffTime
   -> Client m
   -> m ()
-runClient tracer getSubscribers serverId slotLength Client{multiplexer, identifier, options, generator} =
+runClient tracer events serverId slotLength Client{multiplexer, identifier} = do
   concurrently_
     (startMultiplexer (contramap TraceClientMultiplexer tracer) multiplexer)
-    (withLabel ("Main: "<> show identifier) $ clientMain 0 generator)
+    (withLabel ("Main: "<> show identifier) $ clientMain 0 events)
  where
-  clientMain :: SlotNo -> StdGen -> m ()
-  clientMain currentSlot (randomR (1, 100) -> (pOnline, g))
-    | (pOnline % 100) <= options ^. #onlineLikelyhood = do
-        traceWith tracer $ TraceClientWakeUp currentSlot
-        sendTo multiplexer serverId Pull
-        let (pSubmit, g') = randomR (1, 100) g
-        if (pSubmit % 100) <= options ^. #submitLikelyhood then do
-          subscribers <- getSubscribers identifier
-          let msg = NewTx (mockTx identifier currentSlot) subscribers
-          sendTo multiplexer serverId msg
-        else
-          pure ()
-        idle currentSlot g'
+  clientMain :: SlotNo -> [Event] -> m ()
+  clientMain currentSlot = \case
+    [] ->
+      pure ()
 
-    | otherwise =
-        idle currentSlot g
+    (e:q) | from e /= identifier ->
+      clientMain currentSlot q
 
-  idle :: SlotNo -> StdGen -> m ()
-  idle currentSlot g =
-    threadDelay slotLength >> clientMain (succ currentSlot) g
+    (e:q) | slot e <= currentSlot -> do
+      sendTo multiplexer serverId (msg e)
+      clientMain currentSlot q
+
+    (e:q) -> do
+      threadDelay slotLength
+      clientMain (currentSlot + 1) (e:q)
+
+stepClient
+  :: forall m. (Monad m)
+  => (ClientId -> m [ClientId])
+  -> SlotNo
+  -> Client m
+  -> m ([Event], Client m)
+stepClient getSubscribers currentSlot client@Client{identifier, generator, options} = do
+  (events, generator') <- runStateT step generator
+  pure (events, client { generator = generator' })
+ where
+  step :: StateT StdGen m [Event]
+  step = do
+    pOnline <- state (randomR (1, 100))
+    let online = pOnline % 100 <= options ^. #onlineLikelyhood
+    pSubmit <- state (randomR (1, 100))
+    let submit = online && (pSubmit % 100 <= options ^. #submitLikelyhood)
+    subscribers <- lift $ getSubscribers identifier
+    pure
+      [ Event currentSlot identifier msg
+      | (predicate, msg) <-
+          [ ( online, Pull )
+          , ( submit, NewTx (mockTx identifier currentSlot) subscribers )
+          ]
+      , predicate
+      ]
 
 data TraceClient
   = TraceClientMultiplexer (TraceMultiplexer Msg)
@@ -408,5 +448,5 @@ mkGetSubscribers
   -> ClientId
   -> m [ClientId]
 mkGetSubscribers clients (NodeId sender) = do
-  let subscriber = NodeId $ max 1 (succ sender `mod` length clients)
+  let subscriber = NodeId $ max 1 (succ sender `mod` (length clients + 1))
   pure [subscriber]

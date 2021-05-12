@@ -104,6 +104,7 @@ library
                      , io-sim
                      , io-sim-classes
                      , optparse-applicative
+                     , quiet
                      , random
                      , safe
                      , text

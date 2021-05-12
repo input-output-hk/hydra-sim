@@ -7,5 +7,5 @@ module Hydra.Tail.Simulation.SlotNo
 import Prelude
 
 newtype SlotNo = SlotNo Integer
-  deriving stock (Eq, Show)
+  deriving stock (Eq, Ord, Show)
   deriving (Num, Enum) via Integer
