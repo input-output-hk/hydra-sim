@@ -43,7 +43,7 @@ import Data.Generics.Internal.VL.Lens
 import Data.Generics.Labels
     ()
 import Data.Map.Strict
-    ( Map )
+    ( Map, (!) )
 import Data.Ratio
     ( (%) )
 import Data.Text
@@ -54,12 +54,16 @@ import GHC.Generics
     ( Generic )
 import System.Random
     ( StdGen, mkStdGen, randomR )
+import Text.Pretty.Simple
+    ( pPrint )
 
 import qualified Control.Monad.IOSim as IOSim
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 import qualified Data.Text.Encoding as T
 
+import HydraSim.Analyse
+    ( diffTimeToSeconds )
 import HydraSim.DelayedComp
     ( delayedComp, runComp )
 import HydraSim.Examples.Channels
@@ -67,7 +71,7 @@ import HydraSim.Examples.Channels
 import HydraSim.Multiplexer
     ( Multiplexer, getMessage, newMultiplexer, sendTo, startMultiplexer )
 import HydraSim.Multiplexer.Trace
-    ( TraceMultiplexer )
+    ( TraceMultiplexer (..) )
 import HydraSim.Sized
     ( Size (..), Sized (..) )
 import HydraSim.Tx.Class
@@ -93,33 +97,31 @@ data Options = Options
     -- ^ Options specific to the 'Server'
   , clientOptions :: ClientOptions
     -- ^ Options specific to each 'Client'
-  } deriving (Generic)
+  } deriving (Generic, Show)
 
 data ServerOptions = ServerOptions
   { region :: AWSCenters
     -- ^ 'Server' region
-  , readCapacity :: Size -> DiffTime
+  , readCapacity :: NetworkCapacity
     -- ^ 'Server' network read capacity, in KBits/s
-  , writeCapacity :: Size -> DiffTime
+  , writeCapacity :: NetworkCapacity
     -- ^ 'Server' network write capacity, in KBits/s
-  } deriving (Generic)
+  } deriving (Generic, Show)
 
 data ClientOptions = ClientOptions
   { regions :: [AWSCenters]
     -- ^ Regions to spread each 'Client' across uniformly
-  , readCapacity :: Size -> DiffTime
+  , readCapacity :: NetworkCapacity
     -- ^ Each 'Client' network read capacity, in KBits/s
-  , writeCapacity :: Size -> DiffTime
+  , writeCapacity :: NetworkCapacity
     -- ^ Each 'Client' network write capacity, in KBits/s
-  , transactionRate :: Integer
-    -- ^ Each 'Client' transaction rate, in transaction/slot
   , onlineLikelyhood  :: Rational
     -- ^ Likelyhood of an offline 'Client' to go online at the current slot.
   , submitLikelyhood :: Rational
     -- ^ Likelyhood of a 'Client' to submit a transaction at the current slot.
     -- This models the behavior of clients that only go online to check on the
     -- server state but not necessarily submit any transactions.
-  } deriving (Generic)
+  } deriving (Generic, Show)
 
 runSimulation :: Options -> Trace ()
 runSimulation Options{serverOptions,clientOptions,numberOfClients,slotLength,duration} = runSimTrace $ do
@@ -142,30 +144,76 @@ runSimulation Options{serverOptions,clientOptions,numberOfClients,slotLength,dur
   trServer :: Tracer (IOSim a) TraceServer
   trServer = contramap TraceServer tracer
 
+data Event
+  = ENewTx
+  | EAckTx
+  deriving (Generic, Eq, Ord, Enum, Bounded)
+
+data Analyze = Analyze
+  { totalTransactions :: Integer
+    -- ^ Total transactions sent by all clients.
+  , confirmedTransactions  :: Integer
+    -- ^ Total transactions acknowledged by the server and fully received by clients.
+  , realThroughput :: Double
+    -- ^ Throughput measured from confirmed transactions.
+  , maxThroughput :: Double
+    -- ^ Throughput measured from total transactions.
+  } deriving (Generic, Show)
+
+analyzeSimulation :: Options -> Trace () -> Analyze
+analyzeSimulation Options{duration} trace =
+  let
+    events = foldTraceEvents fn zero trace
+      where
+        zero :: Map Event Integer
+        zero = Map.fromList ((,0) <$> [minBound .. maxBound])
+
+        fn :: (ThreadLabel, TraceTailSimulation) -> Map Event Integer -> Map Event Integer
+        fn = \case
+          (_threadLabel, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId NewTx{}))) ->
+            Map.adjust (+1) ENewTx
+
+          (_threadLabel, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId AckTx{}))) ->
+            Map.adjust (+1) EAckTx
+
+          _ ->
+            id
+
+    totalTransactions =
+      events ! ENewTx
+    confirmedTransactions =
+      events ! EAckTx
+    realThroughput =
+      fromIntegral confirmedTransactions / diffTimeToSeconds duration
+    maxThroughput =
+      fromIntegral totalTransactions / diffTimeToSeconds duration
+   in
+    Analyze{totalTransactions, confirmedTransactions, realThroughput, maxThroughput}
+
 main :: IO ()
 main = do
-  let trace = runSimulation opts
-  -- TODO: Analyze the trace
-  mapM_ print (reverse $ foldTraceEvents (:) [] trace)
+  let trace = runSimulation options
+  let analyze = analyzeSimulation options trace
+  pPrint options
+  pPrint analyze
  where
   -- TODO: Get these from a command-line parser
-  opts :: Options
-  opts = Options
+  options :: Options
+  options = Options
     { duration = 10
     , numberOfClients = 1000
     , slotLength = 1
 
     , serverOptions = ServerOptions
       { region = LondonAWS
-      , readCapacity = _KbitsPerSecond (1024*1024)
-      , writeCapacity = _KbitsPerSecond (1024*1024)
+      , readCapacity = kbitsPerSecond (1024*1024)
+      , writeCapacity = kbitsPerSecond (1024*1024)
       }
 
     , clientOptions = ClientOptions
       { regions = [LondonAWS]
-      , readCapacity = _KbitsPerSecond 512
-      , writeCapacity = _KbitsPerSecond 512
-      , transactionRate = 1
+      , readCapacity = kbitsPerSecond 512
+      , writeCapacity = kbitsPerSecond 512
       , onlineLikelyhood = 50%100
       , submitLikelyhood = 75%100
       }
@@ -262,8 +310,8 @@ newServer identifier clientIds options@ServerOptions{region,writeCapacity,readCa
     "server"
     outboundBufferSize
     inboundBufferSize
-    writeCapacity
-    readCapacity
+    (capacity writeCapacity)
+    (capacity readCapacity)
   return Server { multiplexer, identifier, region, options, clients }
  where
   outboundBufferSize = 1000
@@ -351,8 +399,8 @@ newClient identifier options@ClientOptions{regions,writeCapacity,readCapacity} =
     ("client-" <> show (getNodeId identifier))
     outboundBufferSize
     inboundBufferSize
-    writeCapacity
-    readCapacity
+    (capacity writeCapacity)
+    (capacity readCapacity)
   return Client { multiplexer, identifier, region, options, generator }
  where
   outboundBufferSize = 1000
@@ -461,6 +509,28 @@ mockTx clientId slotNo = MockTx
   }
 
 --
+-- NetworkCapacity
+--
+
+data NetworkCapacity = NetworkCapacity
+  { rate :: Integer
+    -- ^ in KBits/s
+  , capacity :: Size -> DiffTime
+    -- ^ Measure time needed to transfer a payload of the given 'Size'
+  } deriving (Generic)
+
+instance Show NetworkCapacity where
+  showsPrec i NetworkCapacity{rate} =
+    showParen (i >= 10) $ showString (show rate <> " KBits/s")
+
+kbitsPerSecond :: Integer -> NetworkCapacity
+kbitsPerSecond rate =
+  NetworkCapacity{rate,capacity}
+ where
+  capacity (Size bytes) =
+    fromIntegral bytes * fromRational (recip $ (1024 * toRational rate) / 8)
+
+--
 -- Helpers
 --
 
@@ -549,7 +619,3 @@ foldTraceEvents fn st = \case
     throw e
   TraceDeadlock{} ->
     st
-
-_KbitsPerSecond :: Integer -> (Size -> DiffTime)
-_KbitsPerSecond rate (Size bytes) =
-  fromIntegral bytes * fromRational (recip $ (1024 * toRational rate) / 8)
