@@ -108,8 +108,10 @@ data ClientOptions = ClientOptions
     -- ^ Each 'Client' transaction rate, in transaction/slot
   , onlineLikelyhood  :: Rational
     -- ^ Likelyhood of an offline 'Client' to go online at the current slot.
-  , offlineLikelyhood :: Rational
-    -- ^ Likelyhood of an online 'Client' to go offline at the current slot.
+  , submitLikelyhood :: Rational
+    -- ^ Likelyhood of a 'Client' to submit a transaction at the current slot.
+    -- This models the behavior of clients that only go online to check on the
+    -- server state but not necessarily submit any transactions.
   } deriving (Generic)
 
 runSimulation :: Options -> Trace ()
@@ -142,8 +144,8 @@ main = do
   -- TODO: Get these from a command-line parser
   opts :: Options
   opts = Options
-    { duration = 60
-    , numberOfClients = 2
+    { duration = 10
+    , numberOfClients = 10
     , slotLength = 1
 
     , serverOptions = ServerOptions
@@ -157,8 +159,8 @@ main = do
       , readCapacity = _KbitsPerSecond 512
       , writeCapacity = _KbitsPerSecond 512
       , transactionRate = 1
-      , onlineLikelyhood = 1%2
-      , offlineLikelyhood = 1%2
+      , onlineLikelyhood = 50%100
+      , submitLikelyhood = 75%100
       }
     }
 
@@ -273,8 +275,6 @@ instance Exception UnexpectedServerMsg
 
 type ClientId = NodeId
 
-data ClientState = Online | Offline deriving (Generic, Show)
-
 data Client m = Client
   { multiplexer :: Multiplexer m Msg
   , identifier  :: ClientId
@@ -309,38 +309,31 @@ runClient
 runClient tracer getSubscribers serverId slotLength Client{multiplexer, identifier, options, generator} =
   concurrently_
     (startMultiplexer (contramap TraceClientMultiplexer tracer) multiplexer)
-    (withLabel ("Main: "<> show identifier) $ clientMain 0 Offline generator)
+    (withLabel ("Main: "<> show identifier) $ clientMain 0 generator)
  where
-  clientMain :: SlotNo -> ClientState -> StdGen -> m ()
-  clientMain currentSlot st g = do
-    case getNewState g st of
-      (Online, g' ) -> do
-        traceWith tracer $ TraceClientIsOnline currentSlot
-        let n = fromIntegral (options ^. #transactionRate)
-        forM_ [1..n] $ \i -> do
+  clientMain :: SlotNo -> StdGen -> m ()
+  clientMain currentSlot (randomR (1, 100) -> (pOnline, g))
+    | (pOnline % 100) > options ^. #onlineLikelyhood = do
+        traceWith tracer $ TraceClientWakeUp currentSlot
+        let (pSubmit, g') = randomR (1, 100) g
+        if (pSubmit % 100) > options ^. #submitLikelyhood then do
           subscribers <- getSubscribers identifier
-          let msg = NewTx (mockTx identifier currentSlot i) identifier subscribers
+          let msg = NewTx (mockTx identifier currentSlot) identifier subscribers
           sendTo multiplexer serverId msg
-        threadDelay slotLength >> clientMain (succ currentSlot) Online g'
+        else
+          pure ()
+        idle currentSlot g'
 
-      (Offline, g') -> do
-        traceWith tracer $ TraceClientIsOffline currentSlot
-        threadDelay slotLength
-        clientMain (succ currentSlot) Offline g'
-   where
-    getNewState :: StdGen -> ClientState -> (ClientState, StdGen)
-    getNewState (randomR (1, 100) -> (p, g')) = \case
-      Online | (p % 100) > options ^. #offlineLikelyhood ->
-        (Offline, g')
-      Offline | (p % 100) > options ^. #onlineLikelyhood ->
-        (Online, g')
-      same ->
-        (same, g')
+    | otherwise =
+        idle currentSlot g
+
+  idle :: SlotNo -> StdGen -> m ()
+  idle currentSlot g =
+    threadDelay slotLength >> clientMain (succ currentSlot) g
 
 data TraceClient
   = TraceClientMultiplexer (TraceMultiplexer Msg)
-  | TraceClientIsOnline SlotNo
-  | TraceClientIsOffline SlotNo
+  | TraceClientWakeUp SlotNo
   deriving (Show)
 
 --
@@ -391,14 +384,13 @@ validationTime =
 mockTx
   :: ClientId
   -> SlotNo
-  -> Int
   -> MockTx
-mockTx clientId slotNo ix = MockTx
+mockTx clientId slotNo = MockTx
   { txId =
       -- NOTE: Arguably, we could want to keep this unobfuscasted
       -- for debugging purpose. Though putting these elements in
       -- the transaction 'body' might make more sense?
-      (show clientId <> show slotNo <> show ix)
+      (show clientId <> show slotNo)
       & encodeBase16 . hash . T.encodeUtf8 . T.pack
       & TxRef
   , numberOfOutputs =
