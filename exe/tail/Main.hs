@@ -24,9 +24,9 @@ main = do
       writeEvents (filepath options) events
 
     Run options -> do
+      pPrint (serverOptions options)
       events <- readEventsThrow (filepath options)
       let trace = runSimulation options events
       let analyze = analyzeSimulation options trace
-      pPrint options
       pPrint (summarizeEvents events)
       pPrint analyze
