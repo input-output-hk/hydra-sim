@@ -1,7 +1,9 @@
 module Hydra.Tail.Simulation.MockTx
-  ( MockTx
+  ( MockTx(..)
   , validationTime
   , mockTx
+  , defaultTxSize
+  , defaultTxAmount
   ) where
 
 import Prelude
@@ -21,7 +23,7 @@ import Hydra.Tail.Simulation.SlotNo
 import HydraSim.DelayedComp
     ( delayedComp )
 import HydraSim.Sized
-    ( Sized (..) )
+    ( Size, Sized (..) )
 import HydraSim.Tx.Class
     ( Tx (..) )
 import HydraSim.Types
@@ -33,7 +35,8 @@ import qualified Data.Text.Encoding as T
 
 data MockTx = MockTx
   { txId :: TxRef MockTx
-  , numberOfOutputs :: Integer
+  , txSize :: Size
+  , txAmount :: Integer
   } deriving (Eq, Ord, Show)
 
 instance Tx MockTx where
@@ -54,8 +57,7 @@ instance Sized (TxRef MockTx) where
   size = const 32
 
 instance Sized MockTx where
-  size MockTx{numberOfOutputs} =
-    150 + fromInteger (70 * numberOfOutputs)
+  size = txSize
 
 -- TODO: Validation time should vary with the number of outputs?
 validationTime
@@ -67,15 +69,23 @@ validationTime =
 mockTx
   :: NodeId
   -> SlotNo
+  -> Integer
+  -> Size
   -> MockTx
-mockTx clientId slotNo = MockTx
+mockTx clientId slotNo txAmount txSize = MockTx
   { txId =
       -- NOTE: Arguably, we could want to keep this unobfuscasted
       -- for debugging purpose. Though putting these elements in
       -- the transaction 'body' might make more sense?
-      (show clientId <> show slotNo)
+      (show clientId <> show slotNo <> show txAmount)
       & encodeBase16 . hash . T.encodeUtf8 . T.pack
       & TxRef
-  , numberOfOutputs =
-      1
+  , txAmount
+  , txSize
   }
+
+defaultTxSize :: Size
+defaultTxSize = 220
+
+defaultTxAmount :: Integer
+defaultTxAmount = 1_000_000

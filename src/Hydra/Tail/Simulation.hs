@@ -9,7 +9,7 @@ import Prelude
 import Control.Exception
     ( Exception )
 import Control.Monad
-    ( foldM, forM, forM_, void )
+    ( foldM, forM, forM_, liftM4, void )
 import Control.Monad.Class.MonadAsync
     ( MonadAsync, async, concurrently_, forConcurrently_ )
 import Control.Monad.Class.MonadSTM
@@ -36,19 +36,25 @@ import Data.Map.Strict
     ( Map, (!) )
 import Data.Ratio
     ( (%) )
+import Data.Text
+    ( Text )
 import Data.Time.Clock
     ( DiffTime, diffTimeToPicoseconds, picosecondsToDiffTime )
 import GHC.Generics
     ( Generic )
+import Safe
+    ( readMay )
 import System.Random
     ( StdGen, mkStdGen, randomR )
 
 import qualified Control.Monad.IOSim as IOSim
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
+import qualified Data.Text as T
+import qualified Data.Text.IO as TIO
 
 import Hydra.Tail.Simulation.MockTx
-    ( MockTx, mockTx )
+    ( MockTx (..), defaultTxAmount, defaultTxSize, mockTx )
 import Hydra.Tail.Simulation.Options
     ( ClientOptions (..)
     , NetworkCapacity (..)
@@ -71,7 +77,7 @@ import HydraSim.Multiplexer
 import HydraSim.Multiplexer.Trace
     ( TraceMultiplexer (..) )
 import HydraSim.Sized
-    ( Sized (..) )
+    ( Size (..), Sized (..) )
 import HydraSim.Tx.Class
     ( Tx (..) )
 import HydraSim.Types
@@ -170,7 +176,7 @@ data Msg
   --
   -- ↓↓↓ Client messages ↓↓↓
   --
-  = NewTx MockTx [ClientId]
+  = NewTx !MockTx ![ClientId]
   -- ^ A new transaction, sent to some peer. The current behavior of this simulation
   -- consider that each client is only sending to one single peer. Later, we probably
   -- want to challenge this assumption by analyzing real transaction patterns from the
@@ -189,12 +195,12 @@ data Msg
   -- ↓↓↓ Server messages ↓↓↓
   --
 
-  | NotifyTx MockTx
+  | NotifyTx !MockTx
   -- ^ The server will notify concerned clients with transactions they have subscribed to.
   -- How clients subscribe and how the server is keeping track of the subscription is currently
   -- out of scope and will be explored at a later stage.
 
-  | AckTx (TxRef MockTx)
+  | AckTx !(TxRef MockTx)
   -- ^ The server replies to each client submitting a transaction with an acknowledgement.
   deriving (Generic, Show)
 
@@ -216,16 +222,106 @@ instance Sized Msg where
     sizeOfAddress = 57
     sizeOfHeader = 2
 
-data Event = Event
-  { slot :: SlotNo
-  , from :: ClientId
-  , msg :: Msg
-  } deriving (Generic, Show)
-
 data TraceTailSimulation
   = TraceServer TraceServer
   | TraceClient TraceClient
   deriving (Show)
+
+--
+-- Events
+--
+
+-- In this simulation, we have decoupled the generation of events from their
+-- processing. 'Event's are used as an interface, serialized to CSV. This way,
+-- the simulation can be fed with data coming from various places.
+data Event = Event
+  { slot :: !SlotNo
+  , from :: !ClientId
+  , msg :: !Msg
+  } deriving (Generic, Show)
+
+data CouldntParseCsv = CouldntParseCsv FilePath
+  deriving Show
+instance Exception CouldntParseCsv
+
+writeEvents :: FilePath -> [Event] -> IO ()
+writeEvents filepath events = do
+  TIO.writeFile filepath $ T.unlines $
+    "slot,clientId,event,size,amount,recipients"
+    : (eventToCsv <$> events)
+
+readEventsThrow :: FilePath -> IO [Event]
+readEventsThrow filepath = do
+  text <- TIO.readFile filepath
+  case traverse eventFromCsv . drop 1 . T.lines $ text of
+    Nothing -> throwIO $ CouldntParseCsv filepath
+    Just events -> pure events
+
+eventToCsv :: Event -> Text
+eventToCsv = \case
+  -- slot,clientId,'pull'
+  Event (SlotNo sl) (NodeId cl) Pull ->
+    T.intercalate ","
+      [ T.pack (show sl)
+      , T.pack (show cl)
+      , "pull"
+      ]
+
+  -- slot,clientId,new-tx,size,amount,recipients
+  Event (SlotNo sl) (NodeId cl) (NewTx (MockTx _ (Size sz) am) rs) ->
+    T.intercalate ","
+      [ T.pack (show sl)
+      , T.pack (show cl)
+      , "new-tx"
+      , T.pack (show sz)
+      , T.pack (show am)
+      , T.intercalate " " (T.pack . show . getNodeId <$> rs)
+      ]
+
+  e ->
+    error $ "eventToCsv: invalid event to serialize: " <> show e
+
+eventFromCsv :: Text -> Maybe Event
+eventFromCsv line =
+  case T.splitOn "," line of
+    -- slot,clientId,'pull'
+    (sl: (cl: ("pull": _))) -> Event
+        <$> readSlotNo sl
+        <*> readClientId cl
+        <*> pure Pull
+
+    -- slot,clientId,new-tx,size,amount,recipients
+    [ sl, cl, "new-tx", sz, am, rs ] -> Event
+        <$> readSlotNo sl
+        <*> readClientId cl
+        <*> (NewTx
+          <$> liftM4 mockTx (readClientId cl) (readSlotNo sl) (readAmount am) (readSize sz)
+          <*> readRecipients rs
+        )
+
+
+    _ ->
+      Nothing
+ where
+  readClientId :: Text -> Maybe ClientId
+  readClientId =
+    fmap NodeId . readMay . T.unpack
+
+  readSlotNo :: Text -> Maybe SlotNo
+  readSlotNo =
+    fmap SlotNo . readMay . T.unpack
+
+  readAmount :: Text -> Maybe Integer
+  readAmount =
+    readMay . T.unpack
+
+  readSize :: Text -> Maybe Size
+  readSize =
+    fmap Size . readMay . T.unpack
+
+  readRecipients :: Text -> Maybe [ClientId]
+  readRecipients ssv =
+    traverse readClientId (T.splitOn " " ssv )
 
 --
 -- Server
@@ -408,8 +504,12 @@ stepClient getSubscribers currentSlot client@Client{identifier, generator, optio
     pure
       [ Event currentSlot identifier msg
       | (predicate, msg) <-
-          [ ( online, Pull )
-          , ( submit, NewTx (mockTx identifier currentSlot) subscribers )
+          [ ( online
+            , Pull
+            )
+          , ( submit
+            , NewTx (mockTx identifier currentSlot defaultTxAmount defaultTxSize) subscribers
+            )
           ]
       , predicate
       ]

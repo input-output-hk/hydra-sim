@@ -66,6 +66,8 @@ data Options = Options
     -- ^ Slot length
   , duration :: DiffTime
     -- ^ How long to run the simulation (in simulation's time)
+  , filepath :: FilePath
+    -- ^ Filepath to write to or read from.
   , serverOptions :: ServerOptions
     -- ^ Options specific to the 'Server'
   , clientOptions :: ClientOptions
@@ -77,6 +79,7 @@ optionsParser = Options
   <$> numberOfClientsOption
   <*> slotLengthOption
   <*> durationOption
+  <*> filepathOption
   <*> serverOptionsOption
   <*> clientOptionsOption
 
@@ -103,6 +106,15 @@ durationOption = option (maybeReader readDiffTime) $ mempty
   <> value 30
   <> showDefault
   <> help "Duration in seconds of the entire simulation. Ideally large in front of --slot-length."
+
+filepathOption :: Parser FilePath
+filepathOption = option auto $ mempty
+  <> long "filepath"
+  <> metavar "FILEPATH"
+  <> value "events.csv"
+  <> showDefault
+  <> completer (bashCompleter "file")
+  <> help "Filepath to write to / read from comma-separated events."
 
 serverOptionsOption :: Parser ServerOptions
 serverOptionsOption = ServerOptions
