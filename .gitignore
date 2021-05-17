@@ -2,3 +2,4 @@
 *~
 .direnv/
 .cabal.project.local
+events.csv

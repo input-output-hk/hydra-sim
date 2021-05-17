@@ -108,7 +108,7 @@ durationOption = option (maybeReader readDiffTime) $ mempty
   <> help "Duration in seconds of the entire simulation. Ideally large in front of --slot-length."
 
 filepathOption :: Parser FilePath
-filepathOption = option auto $ mempty
+filepathOption = strOption $ mempty
   <> long "filepath"
   <> metavar "FILEPATH"
   <> value "events.csv"

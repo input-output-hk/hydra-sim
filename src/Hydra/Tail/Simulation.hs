@@ -240,6 +240,20 @@ data Event = Event
   , msg :: !Msg
   } deriving (Generic, Show)
 
+data EventSummary = EventSummary
+  { numberOfEvents :: !Int
+  , lastSlot :: !SlotNo
+  } deriving (Generic, Show)
+
+summarizeEvents :: [Event] -> EventSummary
+summarizeEvents events = EventSummary
+  { numberOfEvents
+  , lastSlot
+  }
+ where
+  numberOfEvents = length events
+  lastSlot = last events ^. #slot
+
 data CouldntParseCsv = CouldntParseCsv FilePath
   deriving Show
 instance Exception CouldntParseCsv
@@ -320,8 +334,9 @@ eventFromCsv line =
     fmap Size . readMay . T.unpack
 
   readRecipients :: Text -> Maybe [ClientId]
-  readRecipients ssv =
-    traverse readClientId (T.splitOn " " ssv )
+  readRecipients = \case
+    "" -> Just []
+    ssv -> traverse readClientId (T.splitOn " " ssv)
 
 --
 -- Server
