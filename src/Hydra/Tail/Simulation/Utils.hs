@@ -76,7 +76,7 @@ foldTraceEvents
   -> st
   -> Trace a
   -> st
-foldTraceEvents fn st = \case
+foldTraceEvents fn !st = \case
   Trace time threadId mThreadLabel (EventLog event) next ->
     let
       st' = case (fromDynamic @b event, mThreadLabel) of

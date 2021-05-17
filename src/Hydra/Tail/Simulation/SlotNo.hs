@@ -6,6 +6,12 @@ module Hydra.Tail.Simulation.SlotNo
 
 import Prelude
 
-newtype SlotNo = SlotNo Integer
-  deriving stock (Eq, Ord, Show)
+import GHC.Generics
+    ( Generic )
+import Quiet
+    ( Quiet (..) )
+
+newtype SlotNo = SlotNo { unSlotNo :: Integer }
+  deriving stock (Eq, Ord, Generic)
+  deriving Show via Quiet SlotNo
   deriving (Num, Enum) via Integer

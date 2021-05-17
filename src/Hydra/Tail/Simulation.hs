@@ -32,14 +32,16 @@ import Data.Generics.Internal.VL.Lens
     ( view, (^.) )
 import Data.Generics.Labels
     ()
+import Data.List
+    ( nubBy )
 import Data.Map.Strict
-    ( Map, (!) )
+    ( Map )
 import Data.Ratio
     ( (%) )
 import Data.Text
     ( Text )
 import Data.Time.Clock
-    ( DiffTime, diffTimeToPicoseconds, picosecondsToDiffTime )
+    ( DiffTime, picosecondsToDiffTime )
 import GHC.Generics
     ( Generic )
 import Safe
@@ -58,7 +60,8 @@ import Hydra.Tail.Simulation.MockTx
 import Hydra.Tail.Simulation.Options
     ( ClientOptions (..)
     , NetworkCapacity (..)
-    , Options (..)
+    , PrepareOptions (..)
+    , RunOptions (..)
     , ServerOptions (..)
     , kbitsPerSecond
     )
@@ -89,29 +92,28 @@ import qualified HydraSim.Multiplexer as Multiplexer
 -- Simulation
 --
 
-prepareSimulation :: MonadSTM m => Options -> m [Event]
-prepareSimulation Options{clientOptions,numberOfClients,slotLength,duration} = do
+prepareSimulation :: MonadSTM m => PrepareOptions -> m [Event]
+prepareSimulation PrepareOptions{clientOptions,numberOfClients,duration} = do
   let clientIds = [1..fromInteger numberOfClients]
-  clients <- forM clientIds $ \clientId -> newClient clientId clientOptions
+  clients <- forM clientIds $ \clientId -> newClient clientId
   let getSubscribers = mkGetSubscribers clients
-  let maxSlotNo = diffTimeToPicoseconds duration `div` diffTimeToPicoseconds slotLength
   let events = foldM
-        (\st currentSlot -> (st <>) <$> forEach (stepClient getSubscribers currentSlot))
+        (\st currentSlot -> (st <>) <$> forEach (stepClient clientOptions getSubscribers currentSlot))
         mempty
-        [ SlotNo i | i <- [ 0 .. maxSlotNo ] ]
+        [ i | i <- [ 0 .. duration ] ]
   evalStateT events (Map.fromList $ zip (view #identifier <$> clients) clients)
 
-runSimulation :: Options -> [Event] -> Trace ()
-runSimulation Options{serverOptions,clientOptions,numberOfClients,slotLength,duration} events = runSimTrace $ do
-  let (serverId, clientIds) = (0, [1..fromInteger numberOfClients])
+runSimulation :: RunOptions -> [Event] -> Trace ()
+runSimulation RunOptions{serverOptions,slotLength} events = runSimTrace $ do
+  let (serverId, clientIds) = (0, [1..fromInteger (getNumberOfClients events)])
   server <- newServer serverId clientIds serverOptions
   clients <- forM clientIds $ \clientId -> do
-    client <- newClient clientId clientOptions
+    client <- newClient clientId
     client <$ connectClient client server
   void $ async $ concurrently_
     (runServer trServer server)
     (forConcurrently_ clients (runClient trClient events serverId slotLength))
-  threadDelay duration
+  threadDelay 1e99
  where
   tracer :: Tracer (IOSim a) TraceTailSimulation
   tracer = Tracer IOSim.traceM
@@ -122,11 +124,6 @@ runSimulation Options{serverOptions,clientOptions,numberOfClients,slotLength,dur
   trServer :: Tracer (IOSim a) TraceServer
   trServer = contramap TraceServer tracer
 
-data Metric
-  = NewTx_
-  | AckTx_
-  deriving (Generic, Eq, Ord, Enum, Bounded)
-
 data Analyze = Analyze
   { realThroughput :: Double
     -- ^ Throughput measured from confirmed transactions.
@@ -134,33 +131,23 @@ data Analyze = Analyze
     -- ^ Throughput measured from total transactions.
   } deriving (Generic, Show)
 
-analyzeSimulation :: Options -> Trace () -> Analyze
-analyzeSimulation Options{duration} trace =
+analyzeSimulation :: RunOptions -> [Event] -> Trace () -> Analyze
+analyzeSimulation RunOptions{slotLength} events trace =
   let
-    events = foldTraceEvents fn zero trace
+    (count, realDuration) = foldTraceEvents fn (0, 0) trace
       where
-        zero :: Map Metric Integer
-        zero = Map.fromList ((,0) <$> [minBound .. maxBound])
-
-        fn :: (ThreadLabel, Time, TraceTailSimulation) -> Map Metric Integer -> Map Metric Integer
+        fn :: (ThreadLabel, Time, TraceTailSimulation) -> (Integer, DiffTime) -> (Integer, DiffTime)
         fn = \case
-          (_threadLabel, _t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId NewTx{}))) ->
-            Map.adjust (+1) NewTx_
-
-          (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId AckTx{}))) | t < duration ->
-            Map.adjust (+1) AckTx_
+          (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId AckTx{}))) ->
+            (\(!n, !_) -> (n + 1, t))
 
           _ ->
             id
 
-    totalTransactions =
-      events ! NewTx_
-    confirmedTransactions =
-      events ! AckTx_
     realThroughput =
-      fromIntegral confirmedTransactions / diffTimeToSeconds duration
+      fromIntegral count / diffTimeToSeconds realDuration
     maxThroughput =
-      fromIntegral totalTransactions / diffTimeToSeconds duration
+      fromIntegral count / diffTimeToSeconds (durationOf events slotLength)
    in
     Analyze{realThroughput, maxThroughput}
 
@@ -226,117 +213,6 @@ data TraceTailSimulation
   = TraceServer TraceServer
   | TraceClient TraceClient
   deriving (Show)
-
---
--- Events
---
-
--- In this simulation, we have decoupled the generation of events from their
--- processing. 'Event's are used as an interface, serialized to CSV. This way,
--- the simulation can be fed with data coming from various places.
-data Event = Event
-  { slot :: !SlotNo
-  , from :: !ClientId
-  , msg :: !Msg
-  } deriving (Generic, Show)
-
-data EventSummary = EventSummary
-  { numberOfEvents :: !Int
-  , lastSlot :: !SlotNo
-  } deriving (Generic, Show)
-
-summarizeEvents :: [Event] -> EventSummary
-summarizeEvents events = EventSummary
-  { numberOfEvents
-  , lastSlot
-  }
- where
-  numberOfEvents = length events
-  lastSlot = last events ^. #slot
-
-data CouldntParseCsv = CouldntParseCsv FilePath
-  deriving Show
-instance Exception CouldntParseCsv
-
-writeEvents :: FilePath -> [Event] -> IO ()
-writeEvents filepath events = do
-  TIO.writeFile filepath $ T.unlines $
-    "slot,clientId,event,size,amount,recipients"
-    : (eventToCsv <$> events)
-
-readEventsThrow :: FilePath -> IO [Event]
-readEventsThrow filepath = do
-  text <- TIO.readFile filepath
-  case traverse eventFromCsv . drop 1 . T.lines $ text of
-    Nothing -> throwIO $ CouldntParseCsv filepath
-    Just events -> pure events
-
-eventToCsv :: Event -> Text
-eventToCsv = \case
-  -- slot,clientId,'pull'
-  Event (SlotNo sl) (NodeId cl) Pull ->
-    T.intercalate ","
-      [ T.pack (show sl)
-      , T.pack (show cl)
-      , "pull"
-      ]
-
-  -- slot,clientId,new-tx,size,amount,recipients
-  Event (SlotNo sl) (NodeId cl) (NewTx (MockTx _ (Size sz) am) rs) ->
-    T.intercalate ","
-      [ T.pack (show sl)
-      , T.pack (show cl)
-      , "new-tx"
-      , T.pack (show sz)
-      , T.pack (show am)
-      , T.intercalate " " (T.pack . show . getNodeId <$> rs)
-      ]
-
-  e ->
-    error $ "eventToCsv: invalid event to serialize: " <> show e
-
-eventFromCsv :: Text -> Maybe Event
-eventFromCsv line =
-  case T.splitOn "," line of
-    -- slot,clientId,'pull'
-    (sl: (cl: ("pull": _))) -> Event
-        <$> readSlotNo sl
-        <*> readClientId cl
-        <*> pure Pull
-
-    -- slot,clientId,new-tx,size,amount,recipients
-    [ sl, cl, "new-tx", sz, am, rs ] -> Event
-        <$> readSlotNo sl
-        <*> readClientId cl
-        <*> (NewTx
-          <$> liftM4 mockTx (readClientId cl) (readSlotNo sl) (readAmount am) (readSize sz)
-          <*> readRecipients rs
-        )
-
-
-    _ ->
-      Nothing
- where
-  readClientId :: Text -> Maybe ClientId
-  readClientId =
-    fmap NodeId . readMay . T.unpack
-
-  readSlotNo :: Text -> Maybe SlotNo
-  readSlotNo =
-    fmap SlotNo . readMay . T.unpack
-
-  readAmount :: Text -> Maybe Integer
-  readAmount =
-    readMay . T.unpack
-
-  readSize :: Text -> Maybe Size
-  readSize =
-    fmap Size . readMay . T.unpack
-
-  readRecipients :: Text -> Maybe [ClientId]
-  readRecipients = \case
-    "" -> Just []
-    ssv -> traverse readClientId (T.splitOn " " ssv)
 
 --
 -- Server
@@ -451,23 +327,22 @@ data Client m = Client
   { multiplexer :: Multiplexer m Msg
   , identifier  :: ClientId
   , region :: AWSCenters
-  , options :: ClientOptions
   , generator :: StdGen
   } deriving (Generic)
 
-newClient :: MonadSTM m => ClientId -> ClientOptions -> m (Client m)
-newClient identifier options@ClientOptions{regions} = do
+newClient :: MonadSTM m => ClientId -> m (Client m)
+newClient identifier = do
   multiplexer <- newMultiplexer
     ("client-" <> show (getNodeId identifier))
     outboundBufferSize
     inboundBufferSize
     (capacity $ kbitsPerSecond 512)
     (capacity $ kbitsPerSecond 512)
-  return Client { multiplexer, identifier, region, options, generator }
+  return Client { multiplexer, identifier, region, generator }
  where
   outboundBufferSize = 1000
   inboundBufferSize = 1000
-  region = getRegion regions identifier
+  region = LondonAWS
   generator = mkStdGen (getNodeId identifier)
 
 runClient
@@ -501,20 +376,21 @@ runClient tracer events serverId slotLength Client{multiplexer, identifier} = do
 
 stepClient
   :: forall m. (Monad m)
-  => (ClientId -> m [ClientId])
+  => ClientOptions
+  -> (ClientId -> m [ClientId])
   -> SlotNo
   -> Client m
   -> m ([Event], Client m)
-stepClient getSubscribers currentSlot client@Client{identifier, generator, options} = do
+stepClient options getSubscribers currentSlot client@Client{identifier, generator} = do
   (events, generator') <- runStateT step generator
   pure (events, client { generator = generator' })
  where
   step :: StateT StdGen m [Event]
   step = do
     pOnline <- state (randomR (1, 100))
-    let online = pOnline % 100 <= options ^. #onlineLikelyhood
+    let online = pOnline % 100 <= options ^. #onlineLikelihood
     pSubmit <- state (randomR (1, 100))
-    let submit = online && (pSubmit % 100 <= options ^. #submitLikelyhood)
+    let submit = online && (pSubmit % 100 <= options ^. #submitLikelihood)
     subscribers <- lift $ getSubscribers identifier
     pure
       [ Event currentSlot identifier msg
@@ -533,6 +409,128 @@ data TraceClient
   = TraceClientMultiplexer (TraceMultiplexer Msg)
   | TraceClientWakeUp SlotNo
   deriving (Show)
+
+--
+-- Events
+--
+
+-- In this simulation, we have decoupled the generation of events from their
+-- processing. 'Event's are used as an interface, serialized to CSV. This way,
+-- the simulation can be fed with data coming from various places.
+data Event = Event
+  { slot :: !SlotNo
+  , from :: !ClientId
+  , msg :: !Msg
+  } deriving (Generic, Show)
+
+data SimulationSummary = SimulationSummary
+  { numberOfClients :: !Integer
+  , numberOfEvents :: !Integer
+  , lastSlot :: !SlotNo
+  } deriving (Generic, Show)
+
+summarizeEvents :: [Event] -> SimulationSummary
+summarizeEvents events = SimulationSummary
+  { numberOfClients
+  , numberOfEvents
+  , lastSlot
+  }
+ where
+  numberOfEvents = toInteger (length events)
+  numberOfClients = getNumberOfClients events
+  lastSlot = last events ^. #slot
+
+durationOf :: [Event] -> DiffTime -> DiffTime
+durationOf events slotLength =
+  slotLength * fromIntegral (unSlotNo $ last events ^. #slot)
+
+getNumberOfClients :: [Event] -> Integer
+getNumberOfClients =
+  toInteger . length . nubBy (\a b -> from a == from b)
+
+data CouldntParseCsv = CouldntParseCsv FilePath
+  deriving Show
+instance Exception CouldntParseCsv
+
+writeEvents :: FilePath -> [Event] -> IO ()
+writeEvents filepath events = do
+  TIO.writeFile filepath $ T.unlines $
+    "slot,clientId,event,size,amount,recipients"
+    : (eventToCsv <$> events)
+
+readEventsThrow :: FilePath -> IO [Event]
+readEventsThrow filepath = do
+  text <- TIO.readFile filepath
+  case traverse eventFromCsv . drop 1 . T.lines $ text of
+    Nothing -> throwIO $ CouldntParseCsv filepath
+    Just events -> pure events
+
+eventToCsv :: Event -> Text
+eventToCsv = \case
+  -- slot,clientId,'pull'
+  Event (SlotNo sl) (NodeId cl) Pull ->
+    T.intercalate ","
+      [ T.pack (show sl)
+      , T.pack (show cl)
+      , "pull"
+      ]
+
+  -- slot,clientId,new-tx,size,amount,recipients
+  Event (SlotNo sl) (NodeId cl) (NewTx (MockTx _ (Size sz) am) rs) ->
+    T.intercalate ","
+      [ T.pack (show sl)
+      , T.pack (show cl)
+      , "new-tx"
+      , T.pack (show sz)
+      , T.pack (show am)
+      , T.intercalate " " (T.pack . show . getNodeId <$> rs)
+      ]
+
+  e ->
+    error $ "eventToCsv: invalid event to serialize: " <> show e
+
+eventFromCsv :: Text -> Maybe Event
+eventFromCsv line =
+  case T.splitOn "," line of
+    -- slot,clientId,'pull'
+    (sl: (cl: ("pull": _))) -> Event
+        <$> readSlotNo sl
+        <*> readClientId cl
+        <*> pure Pull
+
+    -- slot,clientId,new-tx,size,amount,recipients
+    [ sl, cl, "new-tx", sz, am, rs ] -> Event
+        <$> readSlotNo sl
+        <*> readClientId cl
+        <*> (NewTx
+          <$> liftM4 mockTx (readClientId cl) (readSlotNo sl) (readAmount am) (readSize sz)
+          <*> readRecipients rs
+        )
+
+
+    _ ->
+      Nothing
+ where
+  readClientId :: Text -> Maybe ClientId
+  readClientId =
+    fmap NodeId . readMay . T.unpack
+
+  readSlotNo :: Text -> Maybe SlotNo
+  readSlotNo =
+    fmap SlotNo . readMay . T.unpack
+
+  readAmount :: Text -> Maybe Integer
+  readAmount =
+    readMay . T.unpack
+
+  readSize :: Text -> Maybe Size
+  readSize =
+    fmap Size . readMay . T.unpack
+
+  readRecipients :: Text -> Maybe [ClientId]
+  readRecipients = \case
+    "" -> Just []
+    ssv -> traverse readClientId (T.splitOn " " ssv)
 
 --
 -- Helpers

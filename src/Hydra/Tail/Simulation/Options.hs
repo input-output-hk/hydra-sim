@@ -6,7 +6,8 @@ module Hydra.Tail.Simulation.Options
   ( Command (..)
   , parseCommand
 
-  , Options (..)
+  , RunOptions (..)
+  , PrepareOptions (..)
   , ClientOptions(..)
   , ServerOptions(..)
 
@@ -28,14 +29,16 @@ import GHC.Generics
 import Safe
     ( initMay, lastMay, readMay )
 
+import Hydra.Tail.Simulation.SlotNo
+    ( SlotNo (..) )
 import HydraSim.Examples.Channels
     ( AWSCenters (..) )
 import HydraSim.Sized
     ( Size (..) )
 
 data Command
-  = Prepare Options
-  | Run Options
+  = Prepare PrepareOptions FilePath
+  | Run RunOptions FilePath
   deriving (Generic, Show)
 
 parseCommand :: IO Command
@@ -51,37 +54,48 @@ parseCommand =
 
 prepareMod :: Mod CommandFields Command
 prepareMod = command "prepare" $ info
-  (helper <*> (Prepare <$> optionsParser))
+  (helper <*> (Prepare <$> prepareOptionsParser <*> filepathArgument))
   (progDesc "Prepare client events for a simulation")
 
 runMod :: Mod CommandFields Command
 runMod = command "run" $ info
-  (helper <*> (Run <$> optionsParser))
+  (helper <*> (Run <$> runOptionsParser <*> filepathArgument))
   (progDesc "Run a simulation given an event schedule")
 
-data Options = Options
+filepathArgument :: Parser FilePath
+filepathArgument = strArgument $ mempty
+  <> metavar "FILEPATH"
+  <> value "events.csv"
+  <> showDefault
+  <> completer (bashCompleter "file")
+  <> help "Filepath to write to / read from comma-separated events."
+
+data PrepareOptions = PrepareOptions
   { numberOfClients :: Integer
     -- ^ Total number of client
-  , slotLength :: DiffTime
-    -- ^ Slot length
-  , duration :: DiffTime
-    -- ^ How long to run the simulation (in simulation's time)
-  , serverOptions :: ServerOptions
-    -- ^ Options specific to the 'Server'
+  , duration :: SlotNo
+    -- ^ Duration of the simulation, in slots.
   , clientOptions :: ClientOptions
     -- ^ Options specific to each 'Client'
-  , filepath :: FilePath
-    -- ^ Filepath to write to or read from.
   } deriving (Generic, Show)
 
-optionsParser :: Parser Options
-optionsParser = Options
+data RunOptions = RunOptions
+  { slotLength :: DiffTime
+    -- ^ Slot length
+  , serverOptions :: ServerOptions
+    -- ^ Options specific to the 'Server'
+  } deriving (Generic, Show)
+
+prepareOptionsParser :: Parser PrepareOptions
+prepareOptionsParser = PrepareOptions
   <$> numberOfClientsOption
-  <*> slotLengthOption
   <*> durationOption
-  <*> serverOptionsOption
   <*> clientOptionsOption
-  <*> filepathArgument
+
+runOptionsParser :: Parser RunOptions
+runOptionsParser = RunOptions
+  <$> slotLengthOption
+  <*> serverOptionsOption
 
 numberOfClientsOption :: Parser Integer
 numberOfClientsOption = option auto $ mempty
@@ -99,21 +113,13 @@ slotLengthOption = option (maybeReader readDiffTime) $ mempty
   <> showDefault
   <> help "Length of slot in seconds considered for the simulation."
 
-durationOption :: Parser DiffTime
-durationOption = option (maybeReader readDiffTime) $ mempty
+durationOption :: Parser SlotNo
+durationOption = option (maybeReader readSlotNo) $ mempty
   <> long "duration"
-  <> metavar "SECONDS"
-  <> value 30
+  <> metavar "SLOT-NO"
+  <> value 60
   <> showDefault
-  <> help "Duration in seconds of the entire simulation. Ideally large in front of --slot-length."
-
-filepathArgument :: Parser FilePath
-filepathArgument = strArgument $ mempty
-  <> metavar "FILEPATH"
-  <> value "events.csv"
-  <> showDefault
-  <> completer (bashCompleter "file")
-  <> help "Filepath to write to / read from comma-separated events."
+  <> help "Duration in slots of the entire simulation."
 
 serverOptionsOption :: Parser ServerOptions
 serverOptionsOption = ServerOptions
@@ -123,9 +129,8 @@ serverOptionsOption = ServerOptions
 
 clientOptionsOption :: Parser ClientOptions
 clientOptionsOption = ClientOptions
-  <$> clientRegionsOption
-  <*> clientOnlineLikelyhoodOption
-  <*> clientSubmitLikelyhoodOption
+  <$> clientOnlineLikelihoodOption
+  <*> clientSubmitLikelihoodOption
 
 data ServerOptions = ServerOptions
   { region :: AWSCenters
@@ -149,36 +154,29 @@ serverWriteCapacityOption =
   networkCapacityOption Server Write (100*1024)
 
 data ClientOptions = ClientOptions
-  { regions :: [AWSCenters]
-    -- ^ Regions to spread each 'Client' across uniformly
-  , onlineLikelyhood  :: Rational
-    -- ^ Likelyhood of an offline 'Client' to go online at the current slot.
-  , submitLikelyhood :: Rational
-    -- ^ Likelyhood of a 'Client' to submit a transaction at the current slot.
+  { onlineLikelihood  :: Rational
+    -- ^ Likelihood of an offline 'Client' to go online at the current slot.
+  , submitLikelihood :: Rational
+    -- ^ Likelihood of a 'Client' to submit a transaction at the current slot.
     -- This models the behavior of clients that only go online to check on the
     -- server state but not necessarily submit any transactions.
   } deriving (Generic, Show)
 
-clientRegionsOption :: Parser [AWSCenters]
-clientRegionsOption =
-  -- FIXME: Somehow 'some' / 'many' are causing issues here probably due to lazyness?
-  pure <$> regionOption Client
-
-clientOnlineLikelyhoodOption :: Parser Rational
-clientOnlineLikelyhoodOption = option auto $ mempty
-  <> long "client-online-likelyhood"
+clientOnlineLikelihoodOption :: Parser Rational
+clientOnlineLikelihoodOption = option auto $ mempty
+  <> long "client-online-likelihood"
   <> metavar "NUM%DEN"
   <> value (1%10)
   <> showDefault
-  <> help "Likelyhood of a client to go online on the next slot."
+  <> help "Likelihood of a client to go online on the next slot."
 
-clientSubmitLikelyhoodOption :: Parser Rational
-clientSubmitLikelyhoodOption = option auto $ mempty
-  <> long "client-submit-likelyhood"
+clientSubmitLikelihoodOption :: Parser Rational
+clientSubmitLikelihoodOption = option auto $ mempty
+  <> long "client-submit-likelihood"
   <> metavar "NUM%DEN"
   <> value (1%3)
   <> showDefault
-  <> help "Likelyhood of a client to submit a transaction when it goes online."
+  <> help "Likelihood of a client to submit a transaction when it goes online."
 
 --
 -- NetworkCapacity
@@ -206,7 +204,12 @@ kbitsPerSecond rate =
 -- Helpers / Internal
 --
 
+readSlotNo :: String -> Maybe SlotNo
+readSlotNo = fmap SlotNo . readMay
+
 readDiffTime :: String -> Maybe DiffTime
+readDiffTime "∞" =
+  pure 1e99
 readDiffTime s = do
   lastMay s >>= guard . (== 's')
   n <- readMay @Integer =<< initMay s

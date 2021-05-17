@@ -11,22 +11,22 @@ import Hydra.Tail.Simulation
     , writeEvents
     )
 import Hydra.Tail.Simulation.Options
-    ( Command (..), Options (..), parseCommand )
+    ( Command (..), parseCommand )
 import Text.Pretty.Simple
     ( pPrint )
 
 main :: IO ()
 main = do
   parseCommand >>= \case
-    Prepare options -> do
+    Prepare options filepath -> do
       pPrint options
       events <- prepareSimulation options
-      writeEvents (filepath options) events
+      writeEvents filepath events
 
-    Run options -> do
-      pPrint (serverOptions options)
-      events <- readEventsThrow (filepath options)
+    Run options filepath -> do
+      pPrint options
+      events <- readEventsThrow filepath
       let trace = runSimulation options events
-      let analyze = analyzeSimulation options trace
+      let analyze = analyzeSimulation options events trace
       pPrint (summarizeEvents events)
       pPrint analyze
