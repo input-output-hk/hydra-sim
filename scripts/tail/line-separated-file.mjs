@@ -6,22 +6,10 @@ export function lineSeparatedFile(filepath) {
 
   writer.write('slot,clientId,event,size,amount,recipients\n');
 
-  let buffer = "";
   return new Writable({
     write(chunk, encoding, callback) {
       const json = JSON.parse(chunk);
-      buffer += `${json.map(csv).join('\n')}\n`;
-      if (buffer.length > 1024*1024) {
-        writer.write(buffer);
-        buffer = "";
-      }
-      callback();
-    },
-
-    end(chunk, encoding, callback) {
-      const json = JSON.parse(chunk);
-      buffer += `${json.map(csv).join('\n')}\n`;
-      writer.write(buffer);
+      writer.write(`${json.map(csv).join('\n')}\n`);
       callback();
     }
   });

@@ -14,7 +14,7 @@ import { Transform } from 'stream';
  * wallets may be therefore associated to the same client, increasing the traffic associated to a
  * single wallet.
  */
-export function createEvents({ numberOfClients = 1000, compression = 10 }) {
+export function createEvents({ numberOfClients = 1000, compression = 10 } = {}) {
   const getClientId = newClientIdCreator(numberOfClients);
 
   const firstTransaction = {};
@@ -37,7 +37,7 @@ export function createEvents({ numberOfClients = 1000, compression = 10 }) {
           return es;
         }
       }, []);
-      callback(null, events.length > 0 ? JSON.stringify(events) : undefined);
+      callback(null, events.length > 0 ? `${JSON.stringify(events)}\n` : undefined);
     }
   })
 }

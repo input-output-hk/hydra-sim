@@ -11,7 +11,7 @@ export function viewViaStakeKeys() {
     transform(chunk, _encoding, callback) {
       const txs = applyBlock(ledger, JSON.parse(chunk));
       if (txs.length > 0) {
-        callback(null, JSON.stringify(txs));
+        callback(null, `${JSON.stringify(txs)}\n`);
       } else {
         callback();
       }

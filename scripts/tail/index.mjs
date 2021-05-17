@@ -15,7 +15,6 @@ const reader = await downloadIfMissing('blocks.json', filepath => {
   return Readable.from(downloadChain(url, [point], filepath));
 });
 
-
 const numberOfClients = parseInt(process.argv[2], 10);
 assert(typeof numberOfClients === 'number', 'Expected number of clients as 1st argument (e.g. 1000)');
 

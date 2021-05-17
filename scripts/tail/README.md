@@ -14,7 +14,7 @@ The first argument given to pipeline corresponds to the number of clients consid
 
 **NOTE (1):** If you haven't downloaded the chain locally, you'll need to install and setup an [Ogmios server](https://github.com/KtorZ/cardano-ogmios) to download blocks from the chain. The script assumes a local instance up-and-running with the default configuration. 
 
-**NOTE (2):** The entire Cardano chain since the beginning of Shelley spreads across ~1.2M blocks. So, processing the whole pipeline takes time. The various intermediate representations are quite voluminous but the result of creating events spread across 1000 clients at a compression rate of 1000 can be found [here](https://raw.githubusercontent.com/input-output-hk/hydra-sim/master/scripts/tail/events-clients:1000-compression:1000.tar.gz). 
+**NOTE (2):** The entire Cardano chain since the beginning of Shelley spreads across ~1.2M blocks. The various intermediate representations are quite voluminous but the final output is quite compact (for it is a CSV file). On a decent CPU, it takes about 3 minutes to run the whole pipeline with a new set of parameter, assuming the blockchain has already been downloaded. 
 
 **NOTE (3):** The pipeline is single-cored, but multiple pipelines can be ran at once to help generating multiple datasets with different parameters. The output filenames are automatically generated from the script's arguments.
 
