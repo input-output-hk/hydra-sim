@@ -1,0 +1,19 @@
+{
+  "name": "hydra-tail-simulation",
+  "version": "1.0.0",
+  "description": "Scripts for producing useful datasets for simulating the Hydra Tail protocol",
+  "main": "index.mjs",
+  "repository": "git@github.com:input-output-hk/hydra-sim.git",
+  "author": "@KtorZ <matthias.benkort@iohk.io>",
+  "private": true,
+  "scripts": {
+    "pipeline": "node index.mjs"
+  },
+  "engines": {
+    "node": "^14.8"
+  },
+  "dependencies": {
+    "ws": "^7.4.5"
+  },
+  "license": "Apache-2.0"
+}
