@@ -27,24 +27,17 @@ module HydraSim.Types
     TraceProtocolEvent (..)
   ) where
 
-import HydraSim.DelayedComp
-import HydraSim.MSig.Mock
-import HydraSim.Sized
-import HydraSim.Tx.Class
-
-import Data.List
-    ( intercalate )
-import Data.Map
-    ( Map )
-import Data.Set
-    ( Set )
-import GHC.Generics
-    ( Generic )
-import Quiet
-    ( Quiet (..) )
-
+import           GHC.Generics (Generic)
+import           Data.List (intercalate)
+import           Data.Map (Map)
 import qualified Data.Map as Map
+import           Data.Set (Set)
 import qualified Data.Set as Set
+import           HydraSim.DelayedComp
+import           HydraSim.MSig.Mock
+import           HydraSim.Sized
+import           HydraSim.Tx.Class
+import           Quiet(Quiet(..))
 
 -- | Identifiers for nodes in the head protocol.
 newtype NodeId = NodeId { getNodeId :: Int }
