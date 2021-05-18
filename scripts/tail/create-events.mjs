@@ -68,11 +68,13 @@ function getAmount(inputs, outputs) {
 function newClientIdCreator(n) {
   const ids = {};
 
+  let i = 0;
   return stakeKey => {
     if (stakeKey == null) { return null; }
     if (ids[stakeKey]) { return ids[stakeKey]; }
 
-    ids[stakeKey] = 1 + (Object.keys(ids).length % n)
+    ids[stakeKey] = 1 + (i % n)
+    i += 1;
 
     return ids[stakeKey];
   };

@@ -24,4 +24,4 @@ assert(typeof compression === 'number' && compression > 1, 'Expected compression
 await reader
   .pipe(viewViaStakeKeys())
   .pipe(createEvents({ numberOfClients, compression }))
-  .pipe(lineSeparatedFile(`events-clients:${numberOfClients}-compression:${compression}.csv`))
+  .pipe(lineSeparatedFile(`datasets/events-clients:${numberOfClients}-compression:${compression}.csv`))
