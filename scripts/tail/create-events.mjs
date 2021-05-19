@@ -1,3 +1,4 @@
+import assert from 'assert';
 import { Transform } from 'stream';
 
 /**
@@ -18,7 +19,8 @@ export function createEvents({ numberOfClients = 1000, compression = 10 } = {}) 
   const getClientId = newClientIdCreator(numberOfClients);
 
   const firstTransaction = {};
-  const translateSlot = slot => Math.round((slot - firstTransaction.slot) / compression)
+  const translateSlot = slot => Math.round((slot - firstTransaction.slot) / compression);
+  const isKnownInput = x => !(x == null || (x && x.wallet == null));
 
   return new Transform({
     transform(chunk, encoding, callback) {
@@ -30,10 +32,12 @@ export function createEvents({ numberOfClients = 1000, compression = 10 } = {}) 
         // are generally all from the same wallet so it is an okay approximation. There
         // are cases however where the sender is `null` when source client is unknown;
         // we discard such transactions.
-        const clientId = getClientId((tx.inputs[0] || {}).wallet);
+        const knownInputs = tx.inputs.filter(isKnownInput);
+        const clientId = getClientId((knownInputs[0] || {}).wallet);
         if (clientId) {
           return es.concat(mkEvents(getClientId, translateSlot, clientId, tx));
         } else {
+          assert(knownInputs.length == 0, `Wrongfully discarded: ${JSON.stringify(tx)}`);
           return es;
         }
       }, []);
@@ -49,7 +53,7 @@ function mkEvents(getClientId, translateSlot, from, { slot, ref, size, inputs, o
 
   const amount = getAmount(inputs, outputs);
 
-  return amount == 0 ? [] : [
+  return amount == 0 || recipients.length == 0 ? [] : [
     { slot: translateSlot(slot), from, msg: 'Pull' },
     { slot: translateSlot(slot), from, msg: { NewTx: { ref, size, recipients, amount } } },
   ];

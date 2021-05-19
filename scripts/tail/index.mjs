@@ -21,7 +21,9 @@ assert(typeof numberOfClients === 'number', 'Expected number of clients as 1st a
 const compression = parseInt(process.argv[3], 10);
 assert(typeof compression === 'number' && compression > 1, 'Expected compression rate as 2nd argument (e.g. 10)');
 
+const writer = fs.createWriteStream("out");
+
 await reader
   .pipe(viewViaStakeKeys())
   .pipe(createEvents({ numberOfClients, compression }))
-  .pipe(lineSeparatedFile(`datasets/events-clients:${numberOfClients}-compression:${compression}.csv`))
+  .pipe(lineSeparatedFile(`datasets/events-clients:${numberOfClients}-compression:${compression}.csv`));
