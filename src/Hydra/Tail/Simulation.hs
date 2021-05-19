@@ -99,7 +99,7 @@ prepareSimulation PrepareOptions{clientOptions,numberOfClients,duration} = do
   let events = foldM
         (\st currentSlot -> (st <>) <$> forEach (stepClient clientOptions getRecipients currentSlot))
         mempty
-        [ i | i <- [ 0 .. duration ] ]
+        [ 0 .. pred duration ]
   evalStateT events (Map.fromList $ zip (view #identifier <$> clients) clients)
 
 runSimulation :: RunOptions -> [Event] -> Trace ()
@@ -146,7 +146,7 @@ analyzeSimulation RunOptions{slotLength} events trace =
             id
 
     realThroughput =
-      fromIntegral numberOfTransactions / diffTimeToSeconds realDuration
+      fromIntegral numberOfTransactions / (1 + diffTimeToSeconds realDuration)
     maxThroughput =
       fromIntegral numberOfTransactions / diffTimeToSeconds (durationOf events slotLength)
    in
@@ -455,7 +455,7 @@ summarizeEvents events = SimulationSummary
 
 durationOf :: [Event] -> DiffTime -> DiffTime
 durationOf events slotLength =
-  slotLength * fromIntegral (unSlotNo $ last events ^. #slot)
+  slotLength * fromIntegral (unSlotNo $ succ $ last events ^. #slot)
 
 getNumberOfClients :: [Event] -> Integer
 getNumberOfClients =
