@@ -95,9 +95,9 @@ prepareSimulation :: MonadSTM m => PrepareOptions -> m [Event]
 prepareSimulation PrepareOptions{clientOptions,numberOfClients,duration} = do
   let clientIds = [1..fromInteger numberOfClients]
   clients <- forM clientIds $ \clientId -> newClient clientId
-  let getSubscribers = mkGetSubscribers clients
+  let getRecipients = mkGetRecipients clients
   let events = foldM
-        (\st currentSlot -> (st <>) <$> forEach (stepClient clientOptions getSubscribers currentSlot))
+        (\st currentSlot -> (st <>) <$> forEach (stepClient clientOptions getRecipients currentSlot))
         mempty
         [ i | i <- [ 0 .. duration ] ]
   evalStateT events (Map.fromList $ zip (view #identifier <$> clients) clients)
@@ -261,22 +261,23 @@ runServer tracer server0@Server{multiplexer} = do
   serverMain :: Server m -> m ()
   serverMain server@Server{clients} = do
     atomically (getMessage multiplexer) >>= \case
-      (clientId, NewTx tx subscribers) -> do
+      (clientId, NewTx tx recipients) -> do
         void $ runComp (txValidate Set.empty tx)
         clients' <- flip execStateT clients $ do
-          forM_ subscribers $ \subscriber -> do
-            lift $ runComp lookupSubscriber
+          forM_ recipients $ \recipient -> do
+            lift $ runComp lookupClient
             modifyM $ updateF clientId $ \case
               (Offline, mailbox) -> do
                 let msg = NotifyTx tx
                 traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
                 pure $ Just (Offline, msg:mailbox)
               same -> do
-                Just same <$ sendTo multiplexer subscriber (NotifyTx tx)
+                Just same <$ sendTo multiplexer recipient (NotifyTx tx)
         sendTo multiplexer clientId (AckTx $ txRef tx)
         serverMain $ server { clients = clients' }
 
       (clientId, Pull) -> do
+        runComp lookupClient
         clients' <- updateF clientId (\case
           (st, mailbox) -> do
             mapM_ (sendTo multiplexer clientId) (reverse mailbox)
@@ -285,18 +286,27 @@ runServer tracer server0@Server{multiplexer} = do
         serverMain $ server { clients = clients' }
 
       (clientId, Connect) -> do
+        runComp lookupClient
         let clients' = Map.update (\(_, mailbox) -> Just (Online, mailbox)) clientId clients
         serverMain $ server { clients = clients' }
 
       (clientId, Disconnect) -> do
+        runComp lookupClient
         let clients' = Map.update (\(_, mailbox) -> Just (Offline, mailbox)) clientId clients
         serverMain $ server { clients = clients' }
 
       (clientId, msg) ->
         throwIO (UnexpectedServerMsg clientId msg)
 
-lookupSubscriber :: DelayedComp ()
-lookupSubscriber =
+-- | A computation simulating the time needed to lookup a client in an in-memory registry.
+-- The value is taken from running benchmarks of the 'containers' Haskell library on a
+-- high-end laptop. The time needed to perform a lookup was deemed non negligeable in front of
+-- the time needed to validate a transaction.
+--
+-- Note that a typical hashmap or map is implemented using balanced binary trees and provide a O(log(n))
+-- lookup performances, so the cost of looking a client in a map of 1000 or 100000 clients is _roughly the same_.
+lookupClient :: DelayedComp ()
+lookupClient =
   delayedComp () (picosecondsToDiffTime 500*1e6) -- 500μs
 
 data TraceServer
@@ -384,7 +394,7 @@ stepClient
   -> SlotNo
   -> Client m
   -> m ([Event], Client m)
-stepClient options getSubscribers currentSlot client@Client{identifier, generator} = do
+stepClient options getRecipients currentSlot client@Client{identifier, generator} = do
   (events, generator') <- runStateT step generator
   pure (events, client { generator = generator' })
  where
@@ -394,7 +404,7 @@ stepClient options getSubscribers currentSlot client@Client{identifier, generato
     let online = pOnline % 100 <= options ^. #onlineLikelihood
     pSubmit <- state (randomR (1, 100))
     let submit = online && (pSubmit % 100 <= options ^. #submitLikelihood)
-    subscribers <- lift $ getSubscribers identifier
+    recipients <- lift $ getRecipients identifier
     pure
       [ Event currentSlot identifier msg
       | (predicate, msg) <-
@@ -402,7 +412,7 @@ stepClient options getSubscribers currentSlot client@Client{identifier, generato
             , Pull
             )
           , ( submit
-            , NewTx (mockTx identifier currentSlot defaultTxAmount defaultTxSize) subscribers
+            , NewTx (mockTx identifier currentSlot defaultTxAmount defaultTxSize) recipients
             )
           ]
       , predicate
@@ -556,13 +566,13 @@ connectClient client server =
     ( client ^. #identifier, client ^. #multiplexer )
     ( server ^. #identifier, server ^. #multiplexer )
 
--- Simple strategy for now to get subscribers of a particular client;
--- at the moment, the next client in line is considered a subscriber.
-mkGetSubscribers
+-- Simple strategy for now to get recipients of a particular client;
+-- at the moment, the next client in line is considered a recipient.
+mkGetRecipients
   :: Applicative m
   => [Client m]
   -> ClientId
   -> m [ClientId]
-mkGetSubscribers clients (NodeId sender) = do
-  let subscriber = NodeId $ max 1 (succ sender `mod` (length clients + 1))
-  pure [subscriber]
+mkGetRecipients clients (NodeId sender) = do
+  let recipient = NodeId $ max 1 (succ sender `mod` (length clients + 1))
+  pure [recipient]
