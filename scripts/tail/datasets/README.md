@@ -4,7 +4,7 @@
 
 ![](./plots/sizes.svg)
 
-### Transactions amounts (Ada)
+### Transactions amounts (ADA)
 
 ![](./plots/amounts.svg)
 
@@ -12,9 +12,13 @@
 
 ![](./plots/recipients.svg)
 
-### Volume over time
+### Volume over time (ADA)
 
-![](./plots/volume.svg)
+![](./plots/volume-ada.svg)
+
+### Volume over time (USD)
+
+![](./plots/volume-usd.svg)
 
 ### Number of transactions over time
 

@@ -1,4 +1,5 @@
 import { ChartJSNodeCanvas } from 'chartjs-node-canvas';
+import { lastByronBlock } from './points-of-interest.mjs';
 import fs from 'fs';
 import assert from 'assert';
 
@@ -9,13 +10,29 @@ const chartJSNodeCanvas = new ChartJSNodeCanvas({ width, height });
 const inputFile = process.argv[2];
 assert(typeof inputFile === 'string', 'Expected input filepath as 1st argument');
 
-const events = fs.readFileSync(inputFile).toString().split("\n").map(s => s.split(","));
+const events = readCsvFileSync(inputFile);
+const compressionRate = Number(inputFile.split("compression:")[1].split(".")[0]);
+const adaToUsd = readCsvFileSync('./datasets/ada-usd-max.csv')
+  .map(([snapshotAt, price]) => {
+    return { snapshotAt: new Date(snapshotAt), price: Number(price) };
+  });
+
+function usd(slot, x) {
+  const date = new Date(lastByronBlock.date.getTime() + slot * 1000 * compressionRate);
+  const { price } = adaToUsd.filter(({ snapshotAt }) => snapshotAt >= date)[0];
+  return price * x;
+}
+
+function ada(slot, x) {
+  return x;
+}
 
 await
   [ ["datasets/plots/sizes.svg", sizes]
   , ["datasets/plots/amounts.svg", amounts]
   , ["datasets/plots/recipients.svg", recipients]
-  , ["datasets/plots/volume.svg", volume]
+  , ["datasets/plots/volume-ada.svg", volume.bind(null, ada, "ADA")]
+  , ["datasets/plots/volume-usd.svg", volume.bind(null, usd, "USD")]
   , ["datasets/plots/density.svg", density]
   ].forEach(async ([filepath, fn]) => {
     console.log(`Plotting: ${filepath}`);
@@ -28,7 +45,7 @@ fs.writeFileSync("datasets/README.md", `> _generated from: \`${inputFile}\`_
 
 ![](./plots/sizes.svg)
 
-### Transactions amounts (Ada)
+### Transactions amounts (ADA)
 
 ![](./plots/amounts.svg)
 
@@ -36,9 +53,13 @@ fs.writeFileSync("datasets/README.md", `> _generated from: \`${inputFile}\`_
 
 ![](./plots/recipients.svg)
 
-### Volume over time
+### Volume over time (ADA)
 
-![](./plots/volume.svg)
+![](./plots/volume-ada.svg)
+
+### Volume over time (USD)
+
+![](./plots/volume-usd.svg)
 
 ### Number of transactions over time
 
@@ -152,7 +173,7 @@ async function recipients(events) {
   return chartJSNodeCanvas.renderToBuffer(configuration);
 }
 
-async function volume(events) {
+async function volume(convert, unit, events) {
   const volumePerSlot = events.reduce((acc, [slot,_1,event,_3,amount]) => {
     if (event === "new-tx") {
       acc[slot] = (acc[slot] || 0) + Number(amount);
@@ -161,7 +182,7 @@ async function volume(events) {
   }, {});
 
   const labels = Object.keys(volumePerSlot).sort((a,b) => a-b);
-  const data = labels.map(slot => volumePerSlot[slot]);
+  const data = labels.map(slot => convert(slot, volumePerSlot[slot]));
 
   const configuration = {
     type: 'line',
@@ -179,7 +200,7 @@ async function volume(events) {
     data: {
       labels,
       datasets: [{
-        label: "volume (in million of Ada)",
+        label: `volume (in million of ${unit})`,
         fill: true,
         backgroundColor: "#b8e994",
         data,
@@ -226,4 +247,12 @@ async function density(events) {
   };
 
   return chartJSNodeCanvas.renderToBuffer(configuration);
+}
+
+function readCsvFileSync(filepath) {
+  return fs.readFileSync(filepath)
+    .toString()
+    .split("\n")
+    .slice(1)
+    .map(s => s.split(","));
 }
