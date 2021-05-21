@@ -86,6 +86,8 @@ data RunOptions = RunOptions
     -- ^ Slot length
   , paymentWindow :: Maybe Lovelace
     -- ^ payment window parameter (a.k.a W), that is, the budget of each client before needing a snapshot.
+  , settlementDelay :: SlotNo
+    -- ^ Number of slots needed for a snapshot to be settled.
   , serverOptions :: ServerOptions
     -- ^ Options specific to the 'Server'
   } deriving (Generic, Show)
@@ -100,6 +102,7 @@ runOptionsParser :: Parser RunOptions
 runOptionsParser = RunOptions
   <$> slotLengthOption
   <*> optional paymentWindowOption
+  <*> settlementDelayOption
   <*> serverOptionsOption
 
 numberOfClientsOption :: Parser Integer
@@ -115,6 +118,14 @@ paymentWindowOption = fmap ada $ option auto $ mempty
   <> long "payment-window"
   <> metavar "ADA"
   <> help "Payment window parameter (a.k.a. `W`), that is, the budget of each client before needing a snapshot."
+
+settlementDelayOption :: Parser SlotNo
+settlementDelayOption = option (maybeReader readSlotNo) $ mempty
+  <> long "settlement-delay"
+  <> metavar "SLOT-NO"
+  <> value 100
+  <> showDefault
+  <> help "Number of slots needed for a snapshot to be settled."
 
 slotLengthOption :: Parser DiffTime
 slotLengthOption = option (maybeReader readDiffTime) $ mempty

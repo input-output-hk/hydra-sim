@@ -7,6 +7,7 @@ module Hydra.Tail.Simulation.Utils
   , forEach
   , foldTraceEvents
   , withTMVar
+  , withTMVar_
   , frequency
   ) where
 
@@ -127,14 +128,21 @@ frequency generators = runState $ do
     | p <= w = gen
     | otherwise = pick (p - w) rest
 
-withTMVar
+withTMVar_
   :: MonadSTM m
   => TMVar m a
   -> (a -> m a)
   -> m ()
+withTMVar_ var action =
+  withTMVar var (fmap ((),) . action)
+
+withTMVar
+  :: MonadSTM m
+  => TMVar m a
+  -> (a -> m (result, a))
+  -> m result
 withTMVar var action = do
-  atomically (takeTMVar var)
-  >>=
-  action
-  >>=
-  atomically . putTMVar var
+  a <- atomically (takeTMVar var)
+  (result, a') <- action a
+  atomically (putTMVar var a')
+  return result

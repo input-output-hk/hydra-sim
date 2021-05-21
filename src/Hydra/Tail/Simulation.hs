@@ -40,6 +40,8 @@ import Control.Monad.Trans.State.Strict
     ( StateT, evalStateT, execStateT, runStateT, state )
 import Control.Tracer
     ( Tracer (..), contramap, traceWith )
+import Data.Foldable
+    ( traverse_ )
 import Data.Generics.Internal.VL.Lens
     ( view, (^.) )
 import Data.Generics.Labels
@@ -96,6 +98,7 @@ import Hydra.Tail.Simulation.Utils
     , updateF
     , withLabel
     , withTMVar
+    , withTMVar_
     )
 import HydraSim.Analyse
     ( diffTimeToSeconds )
@@ -104,7 +107,13 @@ import HydraSim.DelayedComp
 import HydraSim.Examples.Channels
     ( AWSCenters (..), channel )
 import HydraSim.Multiplexer
-    ( Multiplexer, getMessage, newMultiplexer, sendTo, startMultiplexer )
+    ( Multiplexer
+    , getMessage
+    , newMultiplexer
+    , reenqueue
+    , sendTo
+    , startMultiplexer
+    )
 import HydraSim.Multiplexer.Trace
     ( TraceMultiplexer (..) )
 import HydraSim.Sized
@@ -232,6 +241,12 @@ data Msg
   | Disconnect
   -- ^ Client connections and disconnections are modelled using 0-sized messages.
 
+  | SnapshotStart
+  -- ^ Clients informing the server about an ongoing snapshot.
+
+  | SnapshotEnd
+  -- ^ Clients informing the server about the end of a snapshot
+
   --
   -- ↓↓↓ Server messages ↓↓↓
   --
@@ -254,6 +269,10 @@ instance Sized Msg where
     Connect{} ->
       0
     Disconnect{} ->
+      0
+    SnapshotStart{} ->
+      0
+    SnapshotEnd{} ->
       0
     NotifyTx tx ->
       sizeOfHeader + size tx
@@ -279,7 +298,7 @@ data Server m = Server
   , identifier  :: ServerId
   , region :: AWSCenters
   , options :: ServerOptions
-  , registry :: TMVar m (Map ClientId (ClientState, [Msg]))
+  , registry :: TMVar m (Map ClientId (ClientState, [Msg], [Msg]))
   } deriving (Generic)
 
 newServer
@@ -300,7 +319,7 @@ newServer identifier clientIds options@ServerOptions{region,writeCapacity,readCa
  where
   outboundBufferSize = 1000000
   inboundBufferSize = 1000000
-  clients = Map.fromList [ (clientId, (Offline, [])) | clientId <- clientIds ]
+  clients = Map.fromList [ (clientId, (Offline, [], [])) | clientId <- clientIds ]
 
 runServer
   :: forall m. (MonadAsync m, MonadTimer m, MonadThrow m)
@@ -312,46 +331,71 @@ runServer tracer Server{multiplexer, options, registry} = do
     (startMultiplexer (contramap TraceServerMultiplexer tracer) multiplexer)
     (replicateConcurrently_ (options ^. #concurrency) (withLabel "Main: Server" serverMain))
  where
+  reenqueue' = reenqueue (contramap TraceServerMultiplexer tracer)
+
   serverMain :: m ()
   serverMain = do
     atomically (getMessage multiplexer) >>= \case
       (clientId, NewTx tx recipients) -> do
         void $ runComp (txValidate Set.empty tx)
         void $ runComp lookupClient
-        withTMVar registry $ \clients -> do
-          clients' <- flip execStateT clients $ do
-            forM_ recipients $ \recipient -> do
-              modifyM $ updateF clientId $ \case
-                (Offline, mailbox) -> do
-                  let msg = NotifyTx tx
-                  traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
-                  pure $ Just (Offline, msg:mailbox)
-                same -> do
-                  Just same <$ sendTo multiplexer recipient (NotifyTx tx)
-          sendTo multiplexer clientId (AckTx $ txRef tx)
-          return clients'
+
+        blocked <- withTMVar registry $ \clients -> (,clients) <$>
+          Map.traverseMaybeWithKey (matchBlocked recipients) clients
+
+        -- Some of the recipients may be out of their payment window (i.e. 'Blocked'), if
+        -- that's the case, we cannot process the transaction until they are done.
+        if null blocked then
+          withTMVar_ registry $ \clients -> do
+            clients' <- flip execStateT clients $ do
+              forM_ recipients $ \recipient -> do
+                modifyM $ updateF clientId $ \case
+                  (Online, mailbox, queue) -> do
+                    Just (Online, mailbox, queue) <$ sendTo multiplexer recipient (NotifyTx tx)
+                  (st, mailbox, queue) -> do
+                    let msg = NotifyTx tx
+                    traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
+                    pure $ Just (st, msg:mailbox, queue)
+            sendTo multiplexer clientId (AckTx $ txRef tx)
+            return clients'
+        else
+          withTMVar_ registry $ updateF clientId $ \(st, mailbox, queue) ->
+            pure $ Just (st, mailbox, NewTx tx recipients:queue)
         serverMain
 
       (clientId, Pull) -> do
         runComp lookupClient
-        withTMVar registry $ \clients -> do
+        withTMVar_ registry $ \clients -> do
           updateF clientId (\case
-            (st, mailbox) -> do
+            (st, mailbox, queue) -> do
               mapM_ (sendTo multiplexer clientId) (reverse mailbox)
-              pure $ Just (st, [])
+              pure $ Just (st, [], queue)
             ) clients
         serverMain
 
       (clientId, Connect) -> do
         runComp lookupClient
-        withTMVar registry $ \clients -> do
-          return $ Map.update (\(_, mailbox) -> Just (Online, mailbox)) clientId clients
+        withTMVar_ registry $ \clients -> do
+          return $ Map.update (\(_, mailbox, queue) -> Just (Online, mailbox, queue)) clientId clients
         serverMain
 
       (clientId, Disconnect) -> do
         runComp lookupClient
-        withTMVar registry $ \clients -> do
-          return $ Map.update (\(_, mailbox) -> Just (Offline, mailbox)) clientId clients
+        withTMVar_ registry $ \clients -> do
+          return $ Map.update (\(_, mailbox, queue) -> Just (Offline, mailbox, queue)) clientId clients
+        serverMain
+
+      (clientId, SnapshotStart) -> do
+        runComp lookupClient
+        withTMVar_ registry $ \clients -> do
+          return $ Map.update (\(_, mailbox, queue) -> Just (Blocked, mailbox, queue)) clientId clients
+        serverMain
+
+      (clientId, SnapshotEnd) -> do
+        runComp lookupClient
+        withTMVar_ registry $ updateF clientId $ \(_, mailbox, queue) -> do
+          traverse_ (reenqueue' multiplexer) (reverse $ (clientId,) <$> queue)
+          return $ Just (Offline, mailbox, [])
         serverMain
 
       (clientId, msg) ->
@@ -367,6 +411,23 @@ runServer tracer Server{multiplexer, options, registry} = do
 lookupClient :: DelayedComp ()
 lookupClient =
   delayedComp () (picosecondsToDiffTime 500*1e6) -- 500μs
+
+-- | Return 'f (Just Blocked)' iif:
+--
+-- - A client is in the state 'Blocked'
+-- - A client is in given input list of recipients
+--
+matchBlocked
+  :: Applicative f
+  => [ClientId]
+  -> ClientId
+  -> (ClientState, mailbox, blocked)
+  -> f (Maybe ClientState)
+matchBlocked recipients clientId = \case
+  (Blocked, _, _) | clientId `elem` recipients ->
+    pure (Just Blocked)
+  _ ->
+    pure Nothing
 
 data TraceServer
   = TraceServerMultiplexer (TraceMultiplexer Msg)
@@ -390,7 +451,7 @@ instance Exception UnknownClient
 
 type ClientId = NodeId
 
-data ClientState = Online | Offline
+data ClientState = Online | Offline | Blocked
   deriving (Generic, Show, Eq)
 
 data Client m = Client
@@ -472,10 +533,11 @@ runClient tracer events serverId opts Client{multiplexer, identifier} = do
           clientEventLoop (Online, balance) currentSlot q
 
         OutOfPaymentWindow -> do
-          let settlementDelay = 3 -- TODO: Make configurable
-          threadDelay (secondsToDiffTime (unSlotNo settlementDelay) * opts ^. #slotLength)
+          sendTo multiplexer serverId SnapshotStart
+          threadDelay (secondsToDiffTime (unSlotNo (opts ^. #settlementDelay)) * opts ^. #slotLength)
           atomically $ modifyTVar balance (\Balance{current} -> initialBalance current)
-          clientEventLoop (st, balance) (currentSlot + settlementDelay) (e:q)
+          sendTo multiplexer serverId SnapshotEnd
+          clientEventLoop (st, balance) (currentSlot + opts ^. #settlementDelay) (e:q)
 
     (e:q) | slot e <= currentSlot -> do
       when (st == Offline) $ sendTo multiplexer serverId Connect
