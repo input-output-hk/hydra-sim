@@ -145,12 +145,20 @@ data ServerOptions = ServerOptions
   } deriving (Generic, Show)
 
 serverRegionOption :: Parser AWSCenters
-serverRegionOption =
-  regionOption Server
+serverRegionOption = option auto $ mempty
+  <> long "region"
+  <> metavar "AWSCenter"
+  <> value LondonAWS
+  <> showDefault
+  <> help "Location for a peer; influence the network latency."
+  <> completer (listCompleter awsCenters)
+ where
+  awsCenters = [ show @AWSCenters center | center <- [minBound .. maxBound] ]
+
 
 serverConcurrencyOption :: Parser Int
 serverConcurrencyOption = option auto $ mempty
-  <> long "server-concurrency"
+  <> long "concurrency"
   <> metavar "INT"
   <> value 16
   <> showDefault
@@ -158,11 +166,11 @@ serverConcurrencyOption = option auto $ mempty
 
 serverReadCapacityOption :: Parser NetworkCapacity
 serverReadCapacityOption =
-  networkCapacityOption Server Read (100*1024)
+  networkCapacityOption Read (100*1024)
 
 serverWriteCapacityOption :: Parser NetworkCapacity
 serverWriteCapacityOption =
-  networkCapacityOption Server Write (100*1024)
+  networkCapacityOption Write (100*1024)
 
 data ClientOptions = ClientOptions
   { onlineLikelihood  :: Rational
@@ -175,7 +183,7 @@ data ClientOptions = ClientOptions
 
 clientOnlineLikelihoodOption :: Parser Rational
 clientOnlineLikelihoodOption = option auto $ mempty
-  <> long "client-online-likelihood"
+  <> long "online-likelihood"
   <> metavar "NUM%DEN"
   <> value (1%10)
   <> showDefault
@@ -183,7 +191,7 @@ clientOnlineLikelihoodOption = option auto $ mempty
 
 clientSubmitLikelihoodOption :: Parser Rational
 clientSubmitLikelihoodOption = option auto $ mempty
-  <> long "client-submit-likelihood"
+  <> long "submit-likelihood"
   <> metavar "NUM%DEN"
   <> value (1%3)
   <> showDefault
@@ -226,13 +234,6 @@ readDiffTime s = do
   n <- readMay @Integer =<< initMay s
   pure $ picosecondsToDiffTime (n * 1_000_000_000_000)
 
-data ClientOrServer = Client | Server
-
-prettyClientOrServer :: ClientOrServer -> String
-prettyClientOrServer = \case
-  Client -> "client"
-  Server -> "server"
-
 data ReadOrWrite = Read | Write
 
 prettyReadOrWrite :: ReadOrWrite -> String
@@ -240,26 +241,13 @@ prettyReadOrWrite = \case
   Read -> "read"
   Write -> "write"
 
-regionOption :: ClientOrServer -> Parser AWSCenters
-regionOption clientOrServer =
-  option auto $ mempty
-    <> long (prettyClientOrServer clientOrServer <> "-region")
-    <> metavar "AWSCenter"
-    <> value LondonAWS
-    <> showDefault
-    <> help "Location for a peer; influence the network latency."
-    <> completer (listCompleter awsCenters)
- where
-  awsCenters = [ show @AWSCenters center | center <- [minBound .. maxBound] ]
-
-networkCapacityOption :: ClientOrServer -> ReadOrWrite -> Integer -> Parser NetworkCapacity
-networkCapacityOption clientOrServer readOrWrite defaultValue =
+networkCapacityOption :: ReadOrWrite -> Integer -> Parser NetworkCapacity
+networkCapacityOption readOrWrite defaultValue =
   fmap kbitsPerSecond $ option auto $ mempty
-    <> long (clientOrServerS <> "-" <> readOrWriteS <> "-capacity")
+    <> long (readOrWriteS <> "-capacity")
     <> metavar "KBITS/S"
     <> value defaultValue
     <> showDefault
-    <> help (clientOrServerS <> " " <> readOrWriteS <> " network capacity, in KBits/s.")
+    <> help ("server " <> readOrWriteS <> " network capacity, in KBits/s.")
  where
-  clientOrServerS = prettyClientOrServer clientOrServer
   readOrWriteS = prettyReadOrWrite readOrWrite
