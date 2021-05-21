@@ -68,9 +68,13 @@ fs.writeFileSync("datasets/README.md", `> _generated from: \`${inputFile}\`_
 
 async function sizes(events) {
   const bounds =
-    [ [0, 512]
+    [ [0, 192]
+    , [192, 512]
     , [512, 1024]
-    , [1024, Number.POSITIVE_INFINITY]
+    , [1024, 2048]
+    , [2048, 4096]
+    , [4096, 8192]
+    , [8192, Number.POSITIVE_INFINITY]
     ];
 
   const labels = bounds.map(([inf, sup]) => sup >= Number.POSITIVE_INFINITY
@@ -104,7 +108,9 @@ async function amounts(events) {
     , [10, 100]
     , [100, 1000]
     , [1000, 10000]
-    , [10000, Number.POSITIVE_INFINITY]
+    , [10000, 100000]
+    , [100000, 1000000]
+    , [1000000, Number.POSITIVE_INFINITY]
     ];
 
   const labels = bounds.map(([inf, sup]) => sup >= Number.POSITIVE_INFINITY
