@@ -45,7 +45,7 @@ import Data.Generics.Internal.VL.Lens
 import Data.Generics.Labels
     ()
 import Data.List
-    ( nubBy )
+    ( maximumBy )
 import Data.Map.Strict
     ( Map, (!) )
 import Data.Ratio
@@ -587,7 +587,7 @@ durationOf events slotLength =
 
 getNumberOfClients :: [Event] -> Integer
 getNumberOfClients =
-  toInteger . length . nubBy (\a b -> from a == from b)
+  toInteger . getNodeId . from . maximumBy (\a b -> getNodeId (from a) `compare` getNodeId (from b))
 
 data CouldntParseCsv = CouldntParseCsv FilePath
   deriving Show
