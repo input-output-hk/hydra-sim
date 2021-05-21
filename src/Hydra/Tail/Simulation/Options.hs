@@ -29,6 +29,8 @@ import GHC.Generics
 import Safe
     ( initMay, lastMay, readMay )
 
+import Hydra.Tail.Simulation.PaymentWindow
+    ( Lovelace )
 import Hydra.Tail.Simulation.SlotNo
     ( SlotNo (..) )
 import HydraSim.Examples.Channels
@@ -82,6 +84,8 @@ data PrepareOptions = PrepareOptions
 data RunOptions = RunOptions
   { slotLength :: DiffTime
     -- ^ Slot length
+  , paymentWindow :: Maybe Lovelace
+    -- ^ payment window parameter (a.k.a W), that is, the budget of each client before needing a snapshot.
   , serverOptions :: ServerOptions
     -- ^ Options specific to the 'Server'
   } deriving (Generic, Show)
@@ -95,6 +99,7 @@ prepareOptionsParser = PrepareOptions
 runOptionsParser :: Parser RunOptions
 runOptionsParser = RunOptions
   <$> slotLengthOption
+  <*> optional paymentWindowOption
   <*> serverOptionsOption
 
 numberOfClientsOption :: Parser Integer
@@ -104,6 +109,12 @@ numberOfClientsOption = option auto $ mempty
   <> value 1000
   <> showDefault
   <> help "Total / Maximum number of clients in the simulation."
+
+paymentWindowOption :: Parser Lovelace
+paymentWindowOption = fmap (* 1_000_000) $ option auto $ mempty
+  <> long "payment-window"
+  <> metavar "ADA"
+  <> help "Payment window parameter (a.k.a. `W`), that is, the budget of each client before needing a snapshot."
 
 slotLengthOption :: Parser DiffTime
 slotLengthOption = option (maybeReader readDiffTime) $ mempty
@@ -154,7 +165,6 @@ serverRegionOption = option auto $ mempty
   <> completer (listCompleter awsCenters)
  where
   awsCenters = [ show @AWSCenters center | center <- [minBound .. maxBound] ]
-
 
 serverConcurrencyOption :: Parser Int
 serverConcurrencyOption = option auto $ mempty

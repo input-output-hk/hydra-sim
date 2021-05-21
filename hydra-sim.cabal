@@ -94,6 +94,7 @@ library
     Hydra.Tail.Simulation.Utils
     Hydra.Tail.Simulation.MockTx
     Hydra.Tail.Simulation.SlotNo
+    Hydra.Tail.Simulation.PaymentWindow
   build-depends:       base
                      , base16
                      , ansi-terminal

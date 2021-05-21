@@ -8,7 +8,7 @@ import Prelude
 import Control.Exception
     ( Exception )
 import Control.Monad
-    ( foldM, forM, forM_, liftM4, void, when )
+    ( foldM, forM, forM_, forever, liftM4, void, when )
 import Control.Monad.Class.MonadAsync
     ( MonadAsync
     , async
@@ -17,7 +17,17 @@ import Control.Monad.Class.MonadAsync
     , replicateConcurrently_
     )
 import Control.Monad.Class.MonadSTM
-    ( MonadSTM, TMVar, atomically, newTMVarIO, putTMVar, takeTMVar )
+    ( MonadSTM
+    , TMVar
+    , TVar
+    , atomically
+    , modifyTVar
+    , newTMVarIO
+    , newTVarIO
+    , putTMVar
+    , readTVar
+    , takeTMVar
+    )
 import Control.Monad.Class.MonadThrow
     ( MonadThrow, throwIO )
 import Control.Monad.Class.MonadTime
@@ -45,7 +55,7 @@ import Data.Ratio
 import Data.Text
     ( Text )
 import Data.Time.Clock
-    ( DiffTime, picosecondsToDiffTime )
+    ( DiffTime, picosecondsToDiffTime, secondsToDiffTime )
 import GHC.Generics
     ( Generic )
 import Safe
@@ -68,6 +78,14 @@ import Hydra.Tail.Simulation.Options
     , RunOptions (..)
     , ServerOptions (..)
     , kbitsPerSecond
+    )
+import Hydra.Tail.Simulation.PaymentWindow
+    ( Balance (..)
+    , Lovelace (..)
+    , PaymentWindowStatus (..)
+    , initialBalance
+    , modifyCurrent
+    , newPaymentWindow
     )
 import Hydra.Tail.Simulation.SlotNo
     ( SlotNo (..) )
@@ -108,7 +126,7 @@ prepareSimulation PrepareOptions{clientOptions,numberOfClients,duration} = do
   evalStateT events (Map.fromList $ zip (view #identifier <$> clients) clients)
 
 runSimulation :: RunOptions -> [Event] -> Trace ()
-runSimulation RunOptions{serverOptions,slotLength} events = runSimTrace $ do
+runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
   let (serverId, clientIds) = (0, [1..fromInteger (getNumberOfClients events)])
   server <- newServer serverId clientIds serverOptions
   clients <- forM clientIds $ \clientId -> do
@@ -116,7 +134,7 @@ runSimulation RunOptions{serverOptions,slotLength} events = runSimTrace $ do
     client <$ connectClient client server
   void $ async $ concurrently_
     (runServer trServer server)
-    (forConcurrently_ clients (runClient trClient events serverId slotLength))
+    (forConcurrently_ clients (runClient trClient events serverId opts))
   threadDelay 1e99
  where
   tracer :: Tracer (IOSim a) TraceTailSimulation
@@ -396,31 +414,76 @@ runClient
   => Tracer m TraceClient
   -> [Event]
   -> ServerId
-  -> DiffTime
+  -> RunOptions
   -> Client m
   -> m ()
-runClient tracer events serverId slotLength Client{multiplexer, identifier} = do
+runClient tracer events serverId opts Client{multiplexer, identifier} = do
+  -- NOTE: We care little about how much each client balance is in practice. Although
+  -- the 'Balance' is modelled as a product (initial, current) because of the intuitive
+  -- view it offers, we are really only interested in the delta. Balances can therefore
+  -- be _negative_ as part of the simulation.
+  balance <- newTVarIO $ initialBalance 0
   concurrently_
     (startMultiplexer (contramap TraceClientMultiplexer tracer) multiplexer)
-    (withLabel ("Main: " <> show identifier) $ clientMain Offline 0 events)
+    (concurrently_
+      (withLabel ("EventLoop: " <> show identifier) $ clientEventLoop (Offline, balance) 0 events)
+      (withLabel ("Main: " <> show identifier) $ forever $ clientMain balance)
+    )
  where
-  clientMain :: ClientState -> SlotNo -> [Event] -> m ()
-  clientMain !st !currentSlot = \case
+  paymentWindow :: Balance -> PaymentWindowStatus
+  paymentWindow = case opts ^. #paymentWindow of
+    Nothing -> const InPaymentWindow
+    Just w  -> newPaymentWindow w
+
+  clientMain :: TVar m Balance -> m ()
+  clientMain balance =
+    atomically (getMessage multiplexer) >>= \case
+      (_, AckTx{}) ->
+        pure ()
+      (_, NotifyTx MockTx{txAmount}) ->
+        -- NOTE: There's a slight _abuse_ here. Transactions are indeed written from the PoV
+        -- of the _sender_. So the amount corresponds to how much did the sender "lost" in the
+        -- transaction, but, there can be multiple recipients! Irrespective of this, we consider
+        -- in the simulation that *each* recipient receives the full amount.
+        atomically $ modifyTVar balance (modifyCurrent (+ txAmount))
+      (nodeId, msg) ->
+        throwIO $ UnexpectedClientMsg nodeId msg
+
+  clientEventLoop :: (ClientState, TVar m Balance) -> SlotNo -> [Event] -> m ()
+  clientEventLoop (!st, !balance) !currentSlot = \case
     [] ->
       pure ()
 
     (e:q) | from e /= identifier ->
-      clientMain st currentSlot q
+      clientEventLoop (st, balance) currentSlot q
+
+    (e@(Event _ _ (NewTx MockTx{txAmount} _)):q) | slot e <= currentSlot -> do
+      atomically (paymentWindow <$> readTVar balance) >>= \case
+        InPaymentWindow -> do
+          when (st == Offline) $ sendTo multiplexer serverId Connect
+          sendTo multiplexer serverId (msg e)
+          atomically $ modifyTVar balance (modifyCurrent (\x -> x - txAmount))
+          clientEventLoop (Online, balance) currentSlot q
+
+        OutOfPaymentWindow -> do
+          let settlementDelay = 3 -- TODO: Make configurable
+          threadDelay (secondsToDiffTime (unSlotNo settlementDelay) * opts ^. #slotLength)
+          atomically $ modifyTVar balance (\Balance{current} -> initialBalance current)
+          clientEventLoop (st, balance) (currentSlot + settlementDelay) (e:q)
 
     (e:q) | slot e <= currentSlot -> do
       when (st == Offline) $ sendTo multiplexer serverId Connect
       sendTo multiplexer serverId (msg e)
-      clientMain Online currentSlot q
+      clientEventLoop (Online, balance) currentSlot q
 
     (e:q) -> do
       when (st == Online) $ sendTo multiplexer serverId Disconnect
-      threadDelay slotLength
-      clientMain Offline (currentSlot + 1) (e:q)
+      threadDelay (opts ^. #slotLength)
+      clientEventLoop (Offline, balance) (currentSlot + 1) (e:q)
+
+data UnexpectedClientMsg = UnexpectedClientMsg NodeId Msg
+  deriving Show
+instance Exception UnexpectedClientMsg
 
 stepClient
   :: forall m. (Monad m)
@@ -570,7 +633,7 @@ eventFromCsv line =
   readSlotNo =
     fmap SlotNo . readMay . T.unpack
 
-  readAmount :: Text -> Maybe Integer
+  readAmount :: Text -> Maybe Lovelace
   readAmount =
     readMay . T.unpack
 

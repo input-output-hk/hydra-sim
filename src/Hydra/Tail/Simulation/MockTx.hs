@@ -18,6 +18,8 @@ import Data.Text
     ( Text )
 import Data.Time.Clock
     ( DiffTime, picosecondsToDiffTime )
+import Hydra.Tail.Simulation.PaymentWindow
+    ( Lovelace (..) )
 import Hydra.Tail.Simulation.SlotNo
     ( SlotNo (..) )
 import HydraSim.DelayedComp
@@ -36,7 +38,7 @@ import qualified Data.Text.Encoding as T
 data MockTx = MockTx
   { txId :: TxRef MockTx
   , txSize :: Size
-  , txAmount :: Integer
+  , txAmount :: Lovelace
   } deriving (Eq, Ord, Show)
 
 instance Tx MockTx where
@@ -69,7 +71,7 @@ validationTime =
 mockTx
   :: NodeId
   -> SlotNo
-  -> Integer
+  -> Lovelace
   -> Size
   -> MockTx
 mockTx clientId slotNo txAmount txSize = MockTx
@@ -87,5 +89,5 @@ mockTx clientId slotNo txAmount txSize = MockTx
 defaultTxSize :: Size
 defaultTxSize = 220
 
-defaultTxAmount :: Integer
+defaultTxAmount :: Lovelace
 defaultTxAmount = 1_000_000
