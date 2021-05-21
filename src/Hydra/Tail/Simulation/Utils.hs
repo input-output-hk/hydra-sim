@@ -6,12 +6,16 @@ module Hydra.Tail.Simulation.Utils
   , updateF
   , forEach
   , foldTraceEvents
+  , withTMVar
+  , frequency
   ) where
 
 import Control.Exception
     ( throw )
 import Control.Monad.Class.MonadFork
     ( MonadThread, labelThread, myThreadId )
+import Control.Monad.Class.MonadSTM
+    ( MonadSTM, TMVar, atomically, putTMVar, takeTMVar )
 import Control.Monad.Class.MonadTime
     ( Time )
 import Control.Monad.IOSim
@@ -19,7 +23,7 @@ import Control.Monad.IOSim
 import Control.Monad.Trans.Class
     ( lift )
 import Control.Monad.Trans.State.Strict
-    ( StateT, get, put )
+    ( StateT, get, put, runState, state )
 import Data.Dynamic
     ( fromDynamic )
 import Data.Generics.Labels
@@ -28,6 +32,8 @@ import Data.Map.Strict
     ( Map )
 import Data.Typeable
     ( Typeable )
+import System.Random
+    ( RandomGen, randomR )
 
 import qualified Data.Map.Strict as Map
 
@@ -98,3 +104,37 @@ foldTraceEvents fn !st = \case
     throw e
   TraceDeadlock{} ->
     st
+
+-- | Pick a generator from a list of generator given some weights.
+--
+-- >>> frequency [(1, randomR (1, 42)), (10, randomR (42, 1337))] g
+-- (129, g')
+--
+-- In the example above, the second generator of the list has a weigh 10x bigger than the first one, so
+-- it has a much greater chance to run.
+frequency
+  :: RandomGen g
+  => [(Int, g -> (a, g))]
+  -> g
+  -> (a, g)
+frequency generators = runState $ do
+  let total = sum (fst <$> generators)
+  p <- state $ randomR (1, total)
+  state $ pick p generators
+ where
+  pick _ [] = error "frequency: empty list of generators"
+  pick p ((w, gen):rest)
+    | p <= w = gen
+    | otherwise = pick (p - w) rest
+
+withTMVar
+  :: MonadSTM m
+  => TMVar m a
+  -> (a -> m a)
+  -> m ()
+withTMVar var action = do
+  atomically (takeTMVar var)
+  >>=
+  action
+  >>=
+  atomically . putTMVar var

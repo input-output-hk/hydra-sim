@@ -2,8 +2,6 @@ module Hydra.Tail.Simulation.MockTx
   ( MockTx(..)
   , validationTime
   , mockTx
-  , defaultTxSize
-  , defaultTxAmount
   ) where
 
 import Prelude
@@ -85,9 +83,3 @@ mockTx clientId slotNo txAmount txSize = MockTx
   , txAmount
   , txSize
   }
-
-defaultTxSize :: Size
-defaultTxSize = 220
-
-defaultTxAmount :: Lovelace
-defaultTxAmount = 1_000_000

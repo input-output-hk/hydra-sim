@@ -30,7 +30,7 @@ import Safe
     ( initMay, lastMay, readMay )
 
 import Hydra.Tail.Simulation.PaymentWindow
-    ( Lovelace )
+    ( Lovelace, ada )
 import Hydra.Tail.Simulation.SlotNo
     ( SlotNo (..) )
 import HydraSim.Examples.Channels
@@ -111,7 +111,7 @@ numberOfClientsOption = option auto $ mempty
   <> help "Total / Maximum number of clients in the simulation."
 
 paymentWindowOption :: Parser Lovelace
-paymentWindowOption = fmap (* 1_000_000) $ option auto $ mempty
+paymentWindowOption = fmap ada $ option auto $ mempty
   <> long "payment-window"
   <> metavar "ADA"
   <> help "Payment window parameter (a.k.a. `W`), that is, the budget of each client before needing a snapshot."

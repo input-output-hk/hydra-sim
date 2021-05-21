@@ -24,9 +24,7 @@ import Control.Monad.Class.MonadSTM
     , modifyTVar
     , newTMVarIO
     , newTVarIO
-    , putTMVar
     , readTVar
-    , takeTMVar
     )
 import Control.Monad.Class.MonadThrow
     ( MonadThrow, throwIO )
@@ -70,7 +68,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
 import Hydra.Tail.Simulation.MockTx
-    ( MockTx (..), defaultTxAmount, defaultTxSize, mockTx )
+    ( MockTx (..), mockTx )
 import Hydra.Tail.Simulation.Options
     ( ClientOptions (..)
     , NetworkCapacity (..)
@@ -83,6 +81,7 @@ import Hydra.Tail.Simulation.PaymentWindow
     ( Balance (..)
     , Lovelace (..)
     , PaymentWindowStatus (..)
+    , ada
     , initialBalance
     , modifyCurrent
     , newPaymentWindow
@@ -90,7 +89,14 @@ import Hydra.Tail.Simulation.PaymentWindow
 import Hydra.Tail.Simulation.SlotNo
     ( SlotNo (..) )
 import Hydra.Tail.Simulation.Utils
-    ( foldTraceEvents, forEach, modifyM, updateF, withLabel )
+    ( foldTraceEvents
+    , forEach
+    , frequency
+    , modifyM
+    , updateF
+    , withLabel
+    , withTMVar
+    )
 import HydraSim.Analyse
     ( diffTimeToSeconds )
 import HydraSim.DelayedComp
@@ -503,6 +509,27 @@ stepClient options getRecipients currentSlot client@Client{identifier, generator
     pSubmit <- state (randomR (1, 100))
     let submit = online && (pSubmit % 100 <= options ^. #submitLikelihood)
     recipients <- lift $ getRecipients identifier
+
+    -- NOTE: The distribution is extrapolated from real mainchain data.
+    amount <- fmap ada $ state $ frequency
+      [ (122, randomR (1, 10))
+      , (144, randomR (10, 100))
+      , (143, randomR (100, 1000))
+      , ( 92, randomR (1000, 10000))
+      , ( 41, randomR (10000, 100000))
+      , ( 12, randomR (100000, 1000000))
+      ]
+
+    -- NOTE: The distribution is extrapolated from real mainchain data.
+    txSize <- fmap Size $ state $ frequency
+      [ (318, randomR (192, 512))
+      , (129, randomR (512, 1024))
+      , (37, randomR (1024, 2048))
+      , (12, randomR (2048, 4096))
+      , (43, randomR (4096, 8192))
+      , (17, randomR (8192, 16384))
+      ]
+
     pure
       [ Event currentSlot identifier msg
       | (predicate, msg) <-
@@ -510,7 +537,7 @@ stepClient options getRecipients currentSlot client@Client{identifier, generator
             , Pull
             )
           , ( submit
-            , NewTx (mockTx identifier currentSlot defaultTxAmount defaultTxSize) recipients
+            , NewTx (mockTx identifier currentSlot amount txSize) recipients
             )
           ]
       , predicate
@@ -590,7 +617,7 @@ eventToCsv = \case
       ]
 
   -- slot,clientId,new-tx,size,amount,recipients
-  Event (SlotNo sl) (NodeId cl) (NewTx (MockTx _ (Size sz) am) rs) ->
+  Event (SlotNo sl) (NodeId cl) (NewTx (MockTx _ (Size sz) (Lovelace am)) rs) ->
     T.intercalate ","
       [ T.pack (show sl)
       , T.pack (show cl)
@@ -649,18 +676,6 @@ eventFromCsv line =
 --
 -- Helpers
 --
-
-withTMVar
-  :: MonadSTM m
-  => TMVar m a
-  -> (a -> m a)
-  -> m ()
-withTMVar var action = do
-  atomically (takeTMVar var)
-  >>=
-  action
-  >>=
-  atomically . putTMVar var
 
 getRegion
   :: [AWSCenters]

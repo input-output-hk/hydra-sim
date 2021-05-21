@@ -5,6 +5,7 @@ module Hydra.Tail.Simulation.PaymentWindow
   , initialBalance
   , modifyCurrent
   , Lovelace (..)
+  , ada
   , PaymentWindowStatus (..)
   , newPaymentWindow
   ) where
@@ -20,6 +21,9 @@ newtype Lovelace = Lovelace { unLovelace :: Integer }
   deriving stock (Eq, Ord, Generic)
   deriving Show via Quiet Lovelace
   deriving (Read, Num, Enum) via Integer
+
+ada :: Integer -> Lovelace
+ada = Lovelace . (* 1_000_000)
 
 data Balance = Balance
   { initial :: Lovelace
