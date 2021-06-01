@@ -11,7 +11,7 @@ import Hydra.Tail.Simulation
     , writeEvents
     )
 import Hydra.Tail.Simulation.Options
-    ( Command (..), parseCommand )
+    ( Command (..), RunOptions (..), Verbosity (..), parseCommand )
 import Text.Pretty.Simple
     ( pPrint )
 
@@ -27,6 +27,10 @@ main = do
       pPrint options
       events <- readEventsThrow filepath
       let trace = runSimulation options events
-      let analyze = analyzeSimulation options events trace
+      analyze <- analyzeSimulation (reportProgress options) options events trace
       pPrint (summarizeEvents events)
       pPrint analyze
+ where
+  reportProgress options = case verbosity options of
+    Verbose -> putStrLn . ("..." <>) . show
+    Quiet -> const (pure ())

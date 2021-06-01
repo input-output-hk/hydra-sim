@@ -78,33 +78,31 @@ forEach fn = do
   result <$ put elems'
 
 foldTraceEvents
-  :: forall a b st. (Typeable b, Show b)
-  => ((ThreadLabel, Time, b) -> st -> st)
+  :: forall a b m st. (Typeable b, Show b, Monad m)
+  => ((ThreadLabel, Time, b) -> st -> m st)
   -> st
   -> Trace a
-  -> st
+  -> m st
 foldTraceEvents fn !st = \case
-  Trace time threadId mThreadLabel (EventLog event) next ->
-    let
-      st' = case (fromDynamic @b event, mThreadLabel) of
-        (Just b, Nothing) ->
-          error $ "unlabeled thread " <> show threadId <> " in " <> show b
-        (Just b, Just threadLabel) ->
-          fn (threadLabel, time, b) st
-        (Nothing, _) ->
-          st
-     in
-      foldTraceEvents fn st' next
+  Trace time threadId mThreadLabel (EventLog event) next -> do
+    st' <- case (fromDynamic @b event, mThreadLabel) of
+      (Just b, Nothing) ->
+        error $ "unlabeled thread " <> show threadId <> " in " <> show b
+      (Just b, Just threadLabel) ->
+        fn (threadLabel, time, b) st
+      (Nothing, _) ->
+        pure st
+    foldTraceEvents fn st' next
   Trace _time _threadId _threadLabel (EventThrow e) _next ->
     throw e
   Trace _time _threadId _threadLabel _event next ->
     foldTraceEvents fn st next
   TraceMainReturn{} ->
-    st
+    pure st
   TraceMainException _ e _ ->
     throw e
   TraceDeadlock{} ->
-    st
+    pure st
 
 -- | Pick a generator from a list of generator given some weights.
 --

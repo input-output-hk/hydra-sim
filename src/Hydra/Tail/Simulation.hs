@@ -42,6 +42,8 @@ import Control.Tracer
     ( Tracer (..), contramap, traceWith )
 import Data.Foldable
     ( traverse_ )
+import Data.Functor
+    ( ($>) )
 import Data.Generics.Internal.VL.Lens
     ( view, (^.) )
 import Data.Generics.Labels
@@ -178,41 +180,47 @@ data Metric
   | ReadUsage
   deriving (Generic, Eq, Ord, Enum, Bounded)
 
-analyzeSimulation :: RunOptions -> [Event] -> Trace () -> Analyze
-analyzeSimulation RunOptions{slotLength} events trace =
-  let
-    (metrics, lastKnownTx) = foldTraceEvents fn (zero, 0) trace
-      where
-        zero :: Map Metric Integer
+analyzeSimulation :: forall m. Monad m => (SlotNo -> m ()) -> RunOptions -> [Event] -> Trace () -> m Analyze
+analyzeSimulation notify RunOptions{slotLength} events trace = do
+  (metrics, lastKnownTx, _) <-
+    let zero :: Map Metric Integer
         zero = Map.fromList [ (k, 0) | k <- [minBound .. maxBound] ]
 
-        fn :: (ThreadLabel, Time, TraceTailSimulation) -> (Map Metric Integer, DiffTime) -> (Map Metric Integer, DiffTime)
+        fn :: (ThreadLabel, Time, TraceTailSimulation) -> (Map Metric Integer, DiffTime, SlotNo) -> m (Map Metric Integer, DiffTime, SlotNo)
         fn = \case
           (_threadLabel, Time t', TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId AckTx{}))) ->
-            (\(!m, !t) -> (Map.adjust (+ 1) ConfirmedTxs m, max t t'))
+            (\(!m, !t, !sl) -> pure (Map.adjust (+ 1) ConfirmedTxs m, max t t', sl))
 
           (_threadLabel, _time, TraceServer (TraceServerMultiplexer (MPRecvLeading _nodeId (Size s)))) ->
-            (\(!m, !t) -> (Map.adjust (+ toInteger s) ReadUsage m, t))
+            (\(!m, !t, !sl) -> pure (Map.adjust (+ toInteger s) ReadUsage m, t, sl))
 
           (_threadLabel, _time, TraceServer (TraceServerMultiplexer (MPSendLeading _nodeId (Size s)))) ->
-            (\(!m, !t) -> (Map.adjust (+ toInteger s) WriteUsage m, t))
+            (\(!m, !t, !sl) -> pure (Map.adjust (+ toInteger s) WriteUsage m, t, sl))
+
+          (_threadLabel, _time, TraceClient (TraceClientWakeUp sl')) ->
+            (\(!m, !t, !sl) ->
+              if sl' > sl then
+                notify sl' $> (m, t, sl')
+              else
+                pure (m, t, sl))
 
           _ ->
-            id
+            pure
+     in foldTraceEvents fn (zero, 0, -1) trace
 
-    numberOfTransactions =
-      fromIntegral (metrics ! ConfirmedTxs)
+  let numberOfTransactions =
+        fromIntegral (metrics ! ConfirmedTxs)
 
-    maxThroughput =
-      numberOfTransactions / diffTimeToSeconds (durationOf events slotLength)
-    actualThroughput =
-      numberOfTransactions / (1 + diffTimeToSeconds lastKnownTx)
-    actualWriteNetworkUsage =
-      kbitsPerSecond $ (metrics ! WriteUsage) `div` 1024
-    actualReadNetworkUsage =
-      kbitsPerSecond $ (metrics ! ReadUsage) `div` 1024
-   in
-    Analyze{maxThroughput, actualThroughput, actualWriteNetworkUsage, actualReadNetworkUsage}
+  pure $ Analyze
+    { maxThroughput =
+        numberOfTransactions / diffTimeToSeconds (durationOf events slotLength)
+    , actualThroughput =
+        numberOfTransactions / (1 + diffTimeToSeconds lastKnownTx)
+    , actualWriteNetworkUsage =
+        kbitsPerSecond $ (metrics ! WriteUsage) `div` 1024
+    , actualReadNetworkUsage =
+        kbitsPerSecond $ (metrics ! ReadUsage) `div` 1024
+    }
 
 --
 -- (Simplified) Tail-Protocol
@@ -527,20 +535,21 @@ runClient tracer events serverId opts Client{multiplexer, identifier} = do
     (e@(Event _ _ (NewTx MockTx{txAmount} _)):q) | slot e <= currentSlot -> do
       atomically (paymentWindow <$> readTVar balance) >>= \case
         InPaymentWindow -> do
-          when (st == Offline) $ sendTo multiplexer serverId Connect
           sendTo multiplexer serverId (msg e)
           atomically $ modifyTVar balance (modifyCurrent (\x -> x - txAmount))
-          clientEventLoop (Online, balance) currentSlot q
+          clientEventLoop (Offline, balance) currentSlot q
 
         OutOfPaymentWindow -> do
           sendTo multiplexer serverId SnapshotStart
           threadDelay (secondsToDiffTime (unSlotNo (opts ^. #settlementDelay)) * opts ^. #slotLength)
           atomically $ modifyTVar balance (\Balance{current} -> initialBalance current)
           sendTo multiplexer serverId SnapshotEnd
-          clientEventLoop (st, balance) (currentSlot + opts ^. #settlementDelay) (e:q)
+          clientEventLoop (Offline, balance) (currentSlot + opts ^. #settlementDelay) (e:q)
 
     (e:q) | slot e <= currentSlot -> do
-      when (st == Offline) $ sendTo multiplexer serverId Connect
+      when (st == Offline) $ do
+        traceWith tracer (TraceClientWakeUp currentSlot)
+        sendTo multiplexer serverId Connect
       sendTo multiplexer serverId (msg e)
       clientEventLoop (Online, balance) currentSlot q
 

@@ -13,6 +13,8 @@ module Hydra.Tail.Simulation.Options
 
   , NetworkCapacity(..)
   , kbitsPerSecond
+
+  , Verbosity (..)
   ) where
 
 import Options.Applicative
@@ -88,6 +90,8 @@ data RunOptions = RunOptions
     -- ^ payment window parameter (a.k.a W), that is, the budget of each client before needing a snapshot.
   , settlementDelay :: SlotNo
     -- ^ Number of slots needed for a snapshot to be settled.
+  , verbosity :: Verbosity
+    -- ^ Whether to print progress and additional information.
   , serverOptions :: ServerOptions
     -- ^ Options specific to the 'Server'
   } deriving (Generic, Show)
@@ -98,13 +102,6 @@ prepareOptionsParser = PrepareOptions
   <*> durationOption
   <*> clientOptionsOption
 
-runOptionsParser :: Parser RunOptions
-runOptionsParser = RunOptions
-  <$> slotLengthOption
-  <*> optional paymentWindowOption
-  <*> settlementDelayOption
-  <*> serverOptionsOption
-
 numberOfClientsOption :: Parser Integer
 numberOfClientsOption = option auto $ mempty
   <> long "number-of-clients"
@@ -112,6 +109,30 @@ numberOfClientsOption = option auto $ mempty
   <> value 1000
   <> showDefault
   <> help "Total / Maximum number of clients in the simulation."
+
+durationOption :: Parser SlotNo
+durationOption = option (maybeReader readSlotNo) $ mempty
+  <> long "duration"
+  <> metavar "SLOT-NO"
+  <> value 60
+  <> showDefault
+  <> help "Duration in slots of the entire simulation."
+
+runOptionsParser :: Parser RunOptions
+runOptionsParser = RunOptions
+  <$> slotLengthOption
+  <*> optional paymentWindowOption
+  <*> settlementDelayOption
+  <*> verbosityFlag
+  <*> serverOptionsOption
+
+slotLengthOption :: Parser DiffTime
+slotLengthOption = option (maybeReader readDiffTime) $ mempty
+  <> long "slot-length"
+  <> metavar "SECONDS"
+  <> value 1
+  <> showDefault
+  <> help "Length of slot in seconds considered for the simulation."
 
 paymentWindowOption :: Parser Lovelace
 paymentWindowOption = fmap ada $ option auto $ mempty
@@ -127,21 +148,11 @@ settlementDelayOption = option (maybeReader readSlotNo) $ mempty
   <> showDefault
   <> help "Number of slots needed for a snapshot to be settled."
 
-slotLengthOption :: Parser DiffTime
-slotLengthOption = option (maybeReader readDiffTime) $ mempty
-  <> long "slot-length"
-  <> metavar "SECONDS"
-  <> value 1
+verbosityFlag :: Parser Verbosity
+verbosityFlag = flag Verbose Quiet $ mempty
+  <> long "quiet"
   <> showDefault
-  <> help "Length of slot in seconds considered for the simulation."
-
-durationOption :: Parser SlotNo
-durationOption = option (maybeReader readSlotNo) $ mempty
-  <> long "duration"
-  <> metavar "SLOT-NO"
-  <> value 60
-  <> showDefault
-  <> help "Duration in slots of the entire simulation."
+  <> help "Turn off progress report."
 
 serverOptionsOption :: Parser ServerOptions
 serverOptionsOption = ServerOptions
@@ -243,6 +254,8 @@ kbitsPerSecond rate =
 --
 -- Helpers / Internal
 --
+
+data Verbosity = Verbose | Quiet deriving Show
 
 readSlotNo :: String -> Maybe SlotNo
 readSlotNo = fmap SlotNo . readMay
