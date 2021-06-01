@@ -26,9 +26,9 @@ main = do
     Run options filepath -> do
       pPrint options
       events <- readEventsThrow filepath
+      pPrint (summarizeEvents events)
       let trace = runSimulation options events
       analyze <- analyzeSimulation (reportProgress options) options events trace
-      pPrint (summarizeEvents events)
       pPrint analyze
  where
   reportProgress options = case verbosity options of
