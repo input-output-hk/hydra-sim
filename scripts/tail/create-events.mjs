@@ -1,5 +1,7 @@
 import assert from 'assert';
+import { lastByronBlock } from './points-of-interest.mjs';
 import { Transform } from 'stream';
+import { readCsvFileSync } from './utils.mjs';
 
 /**
  * Post-process transactions and transform them as 'events' for the Tail simulation. An
@@ -22,6 +24,19 @@ export function createEvents({ numberOfClients = 1000, compression = 10 } = {}) 
   const translateSlot = slot => Math.round((slot - firstTransaction.slot) / compression);
   const isKnownInput = x => !(x == null || (x && x.wallet == null));
 
+  const adaToUsd = readCsvFileSync('./datasets/ada-usd-max.csv')
+    .map(([snapshotAt, conversionRate]) => {
+      return { snapshotAt: new Date(snapshotAt), conversionRate: Number(conversionRate) };
+    });
+
+  function normalize(slot, amount) {
+    const date = new Date(lastByronBlock.date.getTime() + (slot - lastByronBlock.slot) * 1000);
+    const result = adaToUsd.filter(({ snapshotAt }) => snapshotAt >= date)[0];
+    if (!result) { console.log(slot, date) }
+    const { conversionRate } = result;
+    return Math.round(amount * conversionRate);
+  }
+
   return new Transform({
     transform(chunk, encoding, callback) {
       const txs = JSON.parse(chunk);
@@ -35,7 +50,7 @@ export function createEvents({ numberOfClients = 1000, compression = 10 } = {}) 
         const knownInputs = tx.inputs.filter(isKnownInput);
         const clientId = getClientId((knownInputs[0] || {}).wallet);
         if (clientId) {
-          return es.concat(mkEvents(getClientId, translateSlot, clientId, tx));
+          return es.concat(mkEvents(getClientId, normalize, translateSlot, clientId, tx));
         } else {
           assert(knownInputs.length == 0, `Wrongfully discarded: ${JSON.stringify(tx)}`);
           return es;
@@ -46,12 +61,12 @@ export function createEvents({ numberOfClients = 1000, compression = 10 } = {}) 
   })
 }
 
-function mkEvents(getClientId, translateSlot, from, { slot, ref, size, inputs, outputs }) {
+function mkEvents(getClientId, normalize, translateSlot, from, { slot, ref, size, inputs, outputs }) {
   const recipients = outputs
     .map(({ wallet }) => getClientId(wallet))
     .filter(id => id != null && id != from);
 
-  const amount = getAmount(inputs, outputs);
+  const amount = normalize(slot, getAmount(inputs, outputs));
 
   return amount == 0 || recipients.length == 0 ? [] : [
     { slot: translateSlot(slot), from, msg: 'Pull' },

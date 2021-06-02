@@ -20,3 +20,11 @@ export async function downloadIfMissing(filepath, download) {
     });
   });
 }
+
+export function readCsvFileSync(filepath) {
+  return fs.readFileSync(filepath)
+    .toString()
+    .split("\n")
+    .slice(1)
+    .map(s => s.split(","));
+}
