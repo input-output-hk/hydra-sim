@@ -34,8 +34,6 @@ import Control.Monad.Class.MonadTimer
     ( MonadTimer, threadDelay )
 import Control.Monad.IOSim
     ( IOSim, ThreadLabel, Trace (..), runSimTrace )
-import Control.Monad.Trans.Class
-    ( lift )
 import Control.Monad.Trans.State.Strict
     ( StateT, evalStateT, execStateT, runStateT, state )
 import Control.Tracer
@@ -132,12 +130,11 @@ import qualified HydraSim.Multiplexer as Multiplexer
 --
 
 prepareSimulation :: MonadSTM m => PrepareOptions -> m [Event]
-prepareSimulation PrepareOptions{clientOptions,numberOfClients,duration} = do
+prepareSimulation options@PrepareOptions{numberOfClients,duration} = do
   let clientIds = [1..fromInteger numberOfClients]
-  clients <- forM clientIds $ \clientId -> newClient clientId
-  let getRecipients = mkGetRecipients clients
+  clients <- forM clientIds newClient
   let events = foldM
-        (\st currentSlot -> (st <>) <$> forEach (stepClient clientOptions getRecipients currentSlot))
+        (\st currentSlot -> (st <>) <$> forEach (stepClient options currentSlot))
         mempty
         [ 0 .. pred duration ]
   evalStateT events (Map.fromList $ zip (view #identifier <$> clients) clients)
@@ -575,22 +572,23 @@ instance Exception UnexpectedClientMsg
 
 stepClient
   :: forall m. (Monad m)
-  => ClientOptions
-  -> (ClientId -> m [ClientId])
+  => PrepareOptions
   -> SlotNo
   -> Client m
   -> m ([Event], Client m)
-stepClient options getRecipients currentSlot client@Client{identifier, generator} = do
+stepClient options currentSlot client@Client{identifier, generator} = do
   (events, generator') <- runStateT step generator
   pure (events, client { generator = generator' })
  where
+  ClientOptions { onlineLikelihood, submitLikelihood } = options ^. #clientOptions
+
   step :: StateT StdGen m [Event]
   step = do
     pOnline <- state (randomR (1, 100))
-    let online = pOnline % 100 <= options ^. #onlineLikelihood
+    let online = pOnline % 100 <= onlineLikelihood
     pSubmit <- state (randomR (1, 100))
-    let submit = online && (pSubmit % 100 <= options ^. #submitLikelihood)
-    recipients <- lift $ getRecipients identifier
+    let submit = online && (pSubmit % 100 <= submitLikelihood)
+    recipient <- pickRecipient identifier (options ^. #numberOfClients)
 
     -- NOTE: The distribution is extrapolated from real mainchain data.
     amount <- fmap ada $ state $ frequency
@@ -619,7 +617,7 @@ stepClient options getRecipients currentSlot client@Client{identifier, generator
             , Pull
             )
           , ( submit
-            , NewTx (mockTx identifier currentSlot amount txSize) recipients
+            , NewTx (mockTx identifier currentSlot amount txSize) [recipient]
             )
           ]
       , predicate
@@ -766,6 +764,18 @@ getRegion
 getRegion regions (NodeId i) =
   regions !! (i `mod` length regions)
 
+pickRecipient
+  :: Monad m
+  => ClientId
+  -> Integer
+  -> StateT StdGen m ClientId
+pickRecipient (NodeId me) n = do
+  i <- state (randomR (1, n))
+  if i == fromIntegral me then
+    pickRecipient (NodeId me) n
+  else
+    pure $ NodeId (fromIntegral i)
+
 connectClient
   :: (MonadAsync m, MonadTimer m, MonadTime m)
   => Client m
@@ -775,14 +785,3 @@ connectClient client server =
     ( channel (client ^. #region) (server ^. #region) )
     ( client ^. #identifier, client ^. #multiplexer )
     ( server ^. #identifier, server ^. #multiplexer )
-
--- Simple strategy for now to get recipients of a particular client;
--- at the moment, the next client in line is considered a recipient.
-mkGetRecipients
-  :: Applicative m
-  => [Client m]
-  -> ClientId
-  -> m [ClientId]
-mkGetRecipients clients (NodeId sender) = do
-  let recipient = NodeId $ max 1 (succ sender `mod` (length clients + 1))
-  pure [recipient]
