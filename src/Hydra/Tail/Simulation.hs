@@ -8,7 +8,7 @@ import Prelude
 import Control.Exception
     ( Exception )
 import Control.Monad
-    ( foldM, forM, forM_, forever, liftM4, void, when )
+    ( forM, forM_, forever, join, liftM4, void, when )
 import Control.Monad.Class.MonadAsync
     ( MonadAsync
     , async
@@ -35,7 +35,7 @@ import Control.Monad.Class.MonadTimer
 import Control.Monad.IOSim
     ( IOSim, ThreadLabel, Trace (..), runSimTrace )
 import Control.Monad.Trans.State.Strict
-    ( StateT, evalStateT, execStateT, runStateT, state )
+    ( StateT, evalStateT, execStateT, state )
 import Control.Tracer
     ( Tracer (..), contramap, traceWith )
 import Data.Foldable
@@ -43,7 +43,7 @@ import Data.Foldable
 import Data.Functor
     ( ($>) )
 import Data.Generics.Internal.VL.Lens
-    ( view, (^.) )
+    ( (^.) )
 import Data.Generics.Labels
     ()
 import Data.List
@@ -61,7 +61,7 @@ import GHC.Generics
 import Safe
     ( readMay )
 import System.Random
-    ( StdGen, mkStdGen, randomR )
+    ( StdGen, newStdGen, randomR )
 
 import qualified Control.Monad.IOSim as IOSim
 import qualified Data.Map.Strict as Map
@@ -92,7 +92,6 @@ import Hydra.Tail.Simulation.SlotNo
     ( SlotNo (..) )
 import Hydra.Tail.Simulation.Utils
     ( foldTraceEvents
-    , forEach
     , frequency
     , modifyM
     , updateF
@@ -129,15 +128,12 @@ import qualified HydraSim.Multiplexer as Multiplexer
 -- Simulation
 --
 
-prepareSimulation :: MonadSTM m => PrepareOptions -> m [Event]
+prepareSimulation :: PrepareOptions -> IO [Event]
 prepareSimulation options@PrepareOptions{numberOfClients,duration} = do
   let clientIds = [1..fromInteger numberOfClients]
-  clients <- forM clientIds newClient
-  let events = foldM
-        (\st currentSlot -> (st <>) <$> forEach (stepClient options currentSlot))
-        mempty
-        [ 0 .. pred duration ]
-  evalStateT events (Map.fromList $ zip (view #identifier <$> clients) clients)
+  let events = fmap join $ forM [0 .. pred duration] $ \currentSlot -> do
+        join <$> traverse (stepClient options currentSlot) clientIds
+  newStdGen >>= evalStateT events
 
 runSimulation :: RunOptions -> [Event] -> Trace ()
 runSimulation opts@RunOptions{slotLength,serverOptions} events = runSimTrace $ do
@@ -474,7 +470,6 @@ data Client m = Client
   { multiplexer :: Multiplexer m Msg
   , identifier  :: ClientId
   , region :: AWSCenters
-  , generator :: StdGen
   } deriving (Generic)
 
 newClient :: MonadSTM m => ClientId -> m (Client m)
@@ -485,12 +480,11 @@ newClient identifier = do
     inboundBufferSize
     (capacity $ kbitsPerSecond 512)
     (capacity $ kbitsPerSecond 512)
-  return Client { multiplexer, identifier, region, generator }
+  return Client { multiplexer, identifier, region }
  where
   outboundBufferSize = 1000
   inboundBufferSize = 1000
   region = LondonAWS
-  generator = mkStdGen (getNodeId identifier)
 
 runClient
   :: forall m. (MonadAsync m, MonadTimer m, MonadThrow m)
@@ -574,54 +568,49 @@ stepClient
   :: forall m. (Monad m)
   => PrepareOptions
   -> SlotNo
-  -> Client m
-  -> m ([Event], Client m)
-stepClient options currentSlot client@Client{identifier, generator} = do
-  (events, generator') <- runStateT step generator
-  pure (events, client { generator = generator' })
+  -> ClientId
+  -> StateT StdGen m [Event]
+stepClient options currentSlot identifier = do
+  pOnline <- state (randomR (1, 100))
+  let online = pOnline % 100 <= onlineLikelihood
+  pSubmit <- state (randomR (1, 100))
+  let submit = online && (pSubmit % 100 <= submitLikelihood)
+  recipient <- pickRecipient identifier (options ^. #numberOfClients)
+
+  -- NOTE: The distribution is extrapolated from real mainchain data.
+  amount <- fmap ada $ state $ frequency
+    [ (122, randomR (1, 10))
+    , (144, randomR (10, 100))
+    , (143, randomR (100, 1000))
+    , ( 92, randomR (1000, 10000))
+    , ( 41, randomR (10000, 100000))
+    , ( 12, randomR (100000, 1000000))
+    ]
+
+  -- NOTE: The distribution is extrapolated from real mainchain data.
+  txSize <- fmap Size $ state $ frequency
+    [ (318, randomR (192, 512))
+    , (129, randomR (512, 1024))
+    , (37, randomR (1024, 2048))
+    , (12, randomR (2048, 4096))
+    , (43, randomR (4096, 8192))
+    , (17, randomR (8192, 16384))
+    ]
+
+  pure
+    [ Event currentSlot identifier msg
+    | (predicate, msg) <-
+        [ ( online
+          , Pull
+          )
+        , ( submit
+          , NewTx (mockTx identifier currentSlot amount txSize) [recipient]
+          )
+        ]
+    , predicate
+    ]
  where
   ClientOptions { onlineLikelihood, submitLikelihood } = options ^. #clientOptions
-
-  step :: StateT StdGen m [Event]
-  step = do
-    pOnline <- state (randomR (1, 100))
-    let online = pOnline % 100 <= onlineLikelihood
-    pSubmit <- state (randomR (1, 100))
-    let submit = online && (pSubmit % 100 <= submitLikelihood)
-    recipient <- pickRecipient identifier (options ^. #numberOfClients)
-
-    -- NOTE: The distribution is extrapolated from real mainchain data.
-    amount <- fmap ada $ state $ frequency
-      [ (122, randomR (1, 10))
-      , (144, randomR (10, 100))
-      , (143, randomR (100, 1000))
-      , ( 92, randomR (1000, 10000))
-      , ( 41, randomR (10000, 100000))
-      , ( 12, randomR (100000, 1000000))
-      ]
-
-    -- NOTE: The distribution is extrapolated from real mainchain data.
-    txSize <- fmap Size $ state $ frequency
-      [ (318, randomR (192, 512))
-      , (129, randomR (512, 1024))
-      , (37, randomR (1024, 2048))
-      , (12, randomR (2048, 4096))
-      , (43, randomR (4096, 8192))
-      , (17, randomR (8192, 16384))
-      ]
-
-    pure
-      [ Event currentSlot identifier msg
-      | (predicate, msg) <-
-          [ ( online
-            , Pull
-            )
-          , ( submit
-            , NewTx (mockTx identifier currentSlot amount txSize) [recipient]
-            )
-          ]
-      , predicate
-      ]
 
 data TraceClient
   = TraceClientMultiplexer (TraceMultiplexer Msg)

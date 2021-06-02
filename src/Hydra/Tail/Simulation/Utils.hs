@@ -4,7 +4,6 @@ module Hydra.Tail.Simulation.Utils
   ( withLabel
   , modifyM
   , updateF
-  , forEach
   , foldTraceEvents
   , withTMVar
   , withTMVar_
@@ -67,15 +66,6 @@ updateF k fn =
     Just v ->
       fn v
   ) k
-
-forEach
-  :: forall k v m result. (Monad m, Monoid result)
-  => (v -> m (result, v))
-  -> StateT (Map k v) m result
-forEach fn = do
-  elems <- get
-  (result, elems') <- Map.mapAccum (\es (e, v) -> (e<>es, v)) mempty <$> lift (traverse fn elems)
-  result <$ put elems'
 
 foldTraceEvents
   :: forall a b m st. (Typeable b, Show b, Monad m)
