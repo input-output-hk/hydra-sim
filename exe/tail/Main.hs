@@ -27,7 +27,7 @@ main = do
     Run options filepath -> do
       pPrint options
       events <- readEventsThrow filepath
-      let summary = summarizeEvents events
+      let summary = summarizeEvents options events
       pPrint summary
       let trace = runSimulation options events
       analyze <- withProgressReport (lastSlot summary) options $ \reportProgress ->
