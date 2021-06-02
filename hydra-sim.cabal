@@ -94,6 +94,7 @@ library
     Hydra.Tail.Simulation.Utils
     Hydra.Tail.Simulation.MockTx
     Hydra.Tail.Simulation.SlotNo
+    Hydra.Tail.Simulation.PaymentWindow
   build-depends:       base
                      , base16
                      , ansi-terminal
@@ -120,7 +121,7 @@ executable hydra-tail-simulation
   build-depends:       base
                      , hydra-sim -any
                      , pretty-simple
-  ghc-options:         -O2 -threaded -rtsopts "-with-rtsopts=-T -N2"
+  ghc-options:         -O2 -threaded -rtsopts
 
 executable hydra-head-simulation
   import: project-config

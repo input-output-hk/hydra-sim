@@ -13,13 +13,17 @@ module Hydra.Tail.Simulation.Options
 
   , NetworkCapacity(..)
   , kbitsPerSecond
+
+  , Verbosity (..)
+
+  , withProgressReport
   ) where
 
 import Options.Applicative
 import Prelude
 
 import Control.Monad
-    ( guard )
+    ( guard, when )
 import Data.Ratio
     ( (%) )
 import Data.Time.Clock
@@ -28,7 +32,13 @@ import GHC.Generics
     ( Generic )
 import Safe
     ( initMay, lastMay, readMay )
+import System.Console.ANSI
+    ( hClearLine, setCursorColumn )
+import System.IO
+    ( BufferMode (..), hSetBuffering, hSetEncoding, stdout, utf8 )
 
+import Hydra.Tail.Simulation.PaymentWindow
+    ( Lovelace, ada )
 import Hydra.Tail.Simulation.SlotNo
     ( SlotNo (..) )
 import HydraSim.Examples.Channels
@@ -82,6 +92,12 @@ data PrepareOptions = PrepareOptions
 data RunOptions = RunOptions
   { slotLength :: DiffTime
     -- ^ Slot length
+  , paymentWindow :: Maybe Lovelace
+    -- ^ payment window parameter (a.k.a W), that is, the budget of each client before needing a snapshot.
+  , settlementDelay :: SlotNo
+    -- ^ Number of slots needed for a snapshot to be settled.
+  , verbosity :: Verbosity
+    -- ^ Whether to print progress and additional information.
   , serverOptions :: ServerOptions
     -- ^ Options specific to the 'Server'
   } deriving (Generic, Show)
@@ -92,11 +108,6 @@ prepareOptionsParser = PrepareOptions
   <*> durationOption
   <*> clientOptionsOption
 
-runOptionsParser :: Parser RunOptions
-runOptionsParser = RunOptions
-  <$> slotLengthOption
-  <*> serverOptionsOption
-
 numberOfClientsOption :: Parser Integer
 numberOfClientsOption = option auto $ mempty
   <> long "number-of-clients"
@@ -104,6 +115,22 @@ numberOfClientsOption = option auto $ mempty
   <> value 1000
   <> showDefault
   <> help "Total / Maximum number of clients in the simulation."
+
+durationOption :: Parser SlotNo
+durationOption = option (maybeReader readSlotNo) $ mempty
+  <> long "duration"
+  <> metavar "SLOT-NO"
+  <> value 60
+  <> showDefault
+  <> help "Duration in slots of the entire simulation."
+
+runOptionsParser :: Parser RunOptions
+runOptionsParser = RunOptions
+  <$> slotLengthOption
+  <*> optional paymentWindowOption
+  <*> settlementDelayOption
+  <*> verbosityFlag
+  <*> serverOptionsOption
 
 slotLengthOption :: Parser DiffTime
 slotLengthOption = option (maybeReader readDiffTime) $ mempty
@@ -113,13 +140,25 @@ slotLengthOption = option (maybeReader readDiffTime) $ mempty
   <> showDefault
   <> help "Length of slot in seconds considered for the simulation."
 
-durationOption :: Parser SlotNo
-durationOption = option (maybeReader readSlotNo) $ mempty
-  <> long "duration"
+paymentWindowOption :: Parser Lovelace
+paymentWindowOption = fmap ada $ option auto $ mempty
+  <> long "payment-window"
+  <> metavar "ADA"
+  <> help "Payment window parameter (a.k.a. `W`), that is, the budget of each client before needing a snapshot."
+
+settlementDelayOption :: Parser SlotNo
+settlementDelayOption = option (maybeReader readSlotNo) $ mempty
+  <> long "settlement-delay"
   <> metavar "SLOT-NO"
-  <> value 60
+  <> value 100
   <> showDefault
-  <> help "Duration in slots of the entire simulation."
+  <> help "Number of slots needed for a snapshot to be settled."
+
+verbosityFlag :: Parser Verbosity
+verbosityFlag = flag Verbose Quiet $ mempty
+  <> long "quiet"
+  <> showDefault
+  <> help "Turn off progress report."
 
 serverOptionsOption :: Parser ServerOptions
 serverOptionsOption = ServerOptions
@@ -145,12 +184,19 @@ data ServerOptions = ServerOptions
   } deriving (Generic, Show)
 
 serverRegionOption :: Parser AWSCenters
-serverRegionOption =
-  regionOption Server
+serverRegionOption = option auto $ mempty
+  <> long "region"
+  <> metavar "AWSCenter"
+  <> value LondonAWS
+  <> showDefault
+  <> help "Location for a peer; influence the network latency."
+  <> completer (listCompleter awsCenters)
+ where
+  awsCenters = [ show @AWSCenters center | center <- [minBound .. maxBound] ]
 
 serverConcurrencyOption :: Parser Int
 serverConcurrencyOption = option auto $ mempty
-  <> long "server-concurrency"
+  <> long "concurrency"
   <> metavar "INT"
   <> value 16
   <> showDefault
@@ -158,11 +204,11 @@ serverConcurrencyOption = option auto $ mempty
 
 serverReadCapacityOption :: Parser NetworkCapacity
 serverReadCapacityOption =
-  networkCapacityOption Server Read (100*1024)
+  networkCapacityOption Read (100*1024)
 
 serverWriteCapacityOption :: Parser NetworkCapacity
 serverWriteCapacityOption =
-  networkCapacityOption Server Write (100*1024)
+  networkCapacityOption Write (100*1024)
 
 data ClientOptions = ClientOptions
   { onlineLikelihood  :: Rational
@@ -175,7 +221,7 @@ data ClientOptions = ClientOptions
 
 clientOnlineLikelihoodOption :: Parser Rational
 clientOnlineLikelihoodOption = option auto $ mempty
-  <> long "client-online-likelihood"
+  <> long "online-likelihood"
   <> metavar "NUM%DEN"
   <> value (1%10)
   <> showDefault
@@ -183,7 +229,7 @@ clientOnlineLikelihoodOption = option auto $ mempty
 
 clientSubmitLikelihoodOption :: Parser Rational
 clientSubmitLikelihoodOption = option auto $ mempty
-  <> long "client-submit-likelihood"
+  <> long "submit-likelihood"
   <> metavar "NUM%DEN"
   <> value (1%3)
   <> showDefault
@@ -215,6 +261,8 @@ kbitsPerSecond rate =
 -- Helpers / Internal
 --
 
+data Verbosity = Verbose | Quiet deriving (Show, Eq)
+
 readSlotNo :: String -> Maybe SlotNo
 readSlotNo = fmap SlotNo . readMay
 
@@ -226,13 +274,6 @@ readDiffTime s = do
   n <- readMay @Integer =<< initMay s
   pure $ picosecondsToDiffTime (n * 1_000_000_000_000)
 
-data ClientOrServer = Client | Server
-
-prettyClientOrServer :: ClientOrServer -> String
-prettyClientOrServer = \case
-  Client -> "client"
-  Server -> "server"
-
 data ReadOrWrite = Read | Write
 
 prettyReadOrWrite :: ReadOrWrite -> String
@@ -240,26 +281,33 @@ prettyReadOrWrite = \case
   Read -> "read"
   Write -> "write"
 
-regionOption :: ClientOrServer -> Parser AWSCenters
-regionOption clientOrServer =
-  option auto $ mempty
-    <> long (prettyClientOrServer clientOrServer <> "-region")
-    <> metavar "AWSCenter"
-    <> value LondonAWS
-    <> showDefault
-    <> help "Location for a peer; influence the network latency."
-    <> completer (listCompleter awsCenters)
- where
-  awsCenters = [ show @AWSCenters center | center <- [minBound .. maxBound] ]
-
-networkCapacityOption :: ClientOrServer -> ReadOrWrite -> Integer -> Parser NetworkCapacity
-networkCapacityOption clientOrServer readOrWrite defaultValue =
+networkCapacityOption :: ReadOrWrite -> Integer -> Parser NetworkCapacity
+networkCapacityOption readOrWrite defaultValue =
   fmap kbitsPerSecond $ option auto $ mempty
-    <> long (clientOrServerS <> "-" <> readOrWriteS <> "-capacity")
+    <> long (readOrWriteS <> "-capacity")
     <> metavar "KBITS/S"
     <> value defaultValue
     <> showDefault
-    <> help (clientOrServerS <> " " <> readOrWriteS <> " network capacity, in KBits/s.")
+    <> help ("server " <> readOrWriteS <> " network capacity, in KBits/s.")
  where
-  clientOrServerS = prettyClientOrServer clientOrServer
   readOrWriteS = prettyReadOrWrite readOrWrite
+
+withProgressReport
+  :: SlotNo
+  -> RunOptions
+  -> ((SlotNo -> IO ()) -> IO a)
+  -> IO a
+withProgressReport lastSlot options io = do
+  hSetBuffering stdout NoBuffering
+  hSetEncoding stdout utf8
+  a <- case verbosity options of
+    Verbose -> io $ \(SlotNo sl) -> do
+      setCursorColumn 0
+      putStr $ spinner sl <> " SlotNo " <> show sl <> "/" <> show (unSlotNo lastSlot)
+    Quiet ->
+      io $ \_sl -> pure ()
+  when (verbosity options == Verbose) (hClearLine stdout >> setCursorColumn 0)
+  return a
+ where
+  spinner :: Integer -> String
+  spinner i = ["◰◳◲◱" !! (fromIntegral i `mod` 4)]

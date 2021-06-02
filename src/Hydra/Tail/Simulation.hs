@@ -1,5 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedLabels #-}
+{-# LANGUAGE TypeApplications #-}
 
 module Hydra.Tail.Simulation where
 
@@ -8,7 +9,7 @@ import Prelude
 import Control.Exception
     ( Exception )
 import Control.Monad
-    ( foldM, forM, forM_, liftM4, void, when )
+    ( forM, forM_, forever, join, liftM4, void, when )
 import Control.Monad.Class.MonadAsync
     ( MonadAsync
     , async
@@ -17,7 +18,15 @@ import Control.Monad.Class.MonadAsync
     , replicateConcurrently_
     )
 import Control.Monad.Class.MonadSTM
-    ( MonadSTM, TMVar, atomically, newTMVarIO, putTMVar, takeTMVar )
+    ( MonadSTM
+    , TMVar
+    , TVar
+    , atomically
+    , modifyTVar
+    , newTMVarIO
+    , newTVarIO
+    , readTVar
+    )
 import Control.Monad.Class.MonadThrow
     ( MonadThrow, throwIO )
 import Control.Monad.Class.MonadTime
@@ -26,18 +35,20 @@ import Control.Monad.Class.MonadTimer
     ( MonadTimer, threadDelay )
 import Control.Monad.IOSim
     ( IOSim, ThreadLabel, Trace (..), runSimTrace )
-import Control.Monad.Trans.Class
-    ( lift )
 import Control.Monad.Trans.State.Strict
-    ( StateT, evalStateT, execStateT, runStateT, state )
+    ( StateT, evalStateT, execStateT, state )
 import Control.Tracer
     ( Tracer (..), contramap, traceWith )
+import Data.Foldable
+    ( traverse_ )
+import Data.Functor
+    ( ($>) )
 import Data.Generics.Internal.VL.Lens
-    ( view, (^.) )
+    ( (^.) )
 import Data.Generics.Labels
     ()
 import Data.List
-    ( nubBy )
+    ( foldl', maximumBy )
 import Data.Map.Strict
     ( Map, (!) )
 import Data.Ratio
@@ -45,13 +56,13 @@ import Data.Ratio
 import Data.Text
     ( Text )
 import Data.Time.Clock
-    ( DiffTime, picosecondsToDiffTime )
+    ( DiffTime, picosecondsToDiffTime, secondsToDiffTime )
 import GHC.Generics
     ( Generic )
 import Safe
     ( readMay )
 import System.Random
-    ( StdGen, mkStdGen, randomR )
+    ( StdGen, newStdGen, randomR )
 
 import qualified Control.Monad.IOSim as IOSim
 import qualified Data.Map.Strict as Map
@@ -60,7 +71,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
 import Hydra.Tail.Simulation.MockTx
-    ( MockTx (..), defaultTxAmount, defaultTxSize, mockTx )
+    ( MockTx (..), mockTx )
 import Hydra.Tail.Simulation.Options
     ( ClientOptions (..)
     , NetworkCapacity (..)
@@ -69,10 +80,26 @@ import Hydra.Tail.Simulation.Options
     , ServerOptions (..)
     , kbitsPerSecond
     )
+import Hydra.Tail.Simulation.PaymentWindow
+    ( Balance (..)
+    , Lovelace (..)
+    , PaymentWindowStatus (..)
+    , ada
+    , initialBalance
+    , modifyCurrent
+    , newPaymentWindow
+    )
 import Hydra.Tail.Simulation.SlotNo
     ( SlotNo (..) )
 import Hydra.Tail.Simulation.Utils
-    ( foldTraceEvents, forEach, modifyM, updateF, withLabel )
+    ( foldTraceEvents
+    , frequency
+    , modifyM
+    , updateF
+    , withLabel
+    , withTMVar
+    , withTMVar_
+    )
 import HydraSim.Analyse
     ( diffTimeToSeconds )
 import HydraSim.DelayedComp
@@ -80,7 +107,13 @@ import HydraSim.DelayedComp
 import HydraSim.Examples.Channels
     ( AWSCenters (..), channel )
 import HydraSim.Multiplexer
-    ( Multiplexer, getMessage, newMultiplexer, sendTo, startMultiplexer )
+    ( Multiplexer
+    , getMessage
+    , newMultiplexer
+    , reenqueue
+    , sendTo
+    , startMultiplexer
+    )
 import HydraSim.Multiplexer.Trace
     ( TraceMultiplexer (..) )
 import HydraSim.Sized
@@ -96,19 +129,15 @@ import qualified HydraSim.Multiplexer as Multiplexer
 -- Simulation
 --
 
-prepareSimulation :: MonadSTM m => PrepareOptions -> m [Event]
-prepareSimulation PrepareOptions{clientOptions,numberOfClients,duration} = do
+prepareSimulation :: PrepareOptions -> IO [Event]
+prepareSimulation options@PrepareOptions{numberOfClients,duration} = do
   let clientIds = [1..fromInteger numberOfClients]
-  clients <- forM clientIds $ \clientId -> newClient clientId
-  let getRecipients = mkGetRecipients clients
-  let events = foldM
-        (\st currentSlot -> (st <>) <$> forEach (stepClient clientOptions getRecipients currentSlot))
-        mempty
-        [ 0 .. pred duration ]
-  evalStateT events (Map.fromList $ zip (view #identifier <$> clients) clients)
+  let events = fmap join $ forM [0 .. pred duration] $ \currentSlot -> do
+        join <$> traverse (stepClient options currentSlot) clientIds
+  newStdGen >>= evalStateT events
 
 runSimulation :: RunOptions -> [Event] -> Trace ()
-runSimulation RunOptions{serverOptions,slotLength} events = runSimTrace $ do
+runSimulation opts@RunOptions{slotLength,serverOptions} events = runSimTrace $ do
   let (serverId, clientIds) = (0, [1..fromInteger (getNumberOfClients events)])
   server <- newServer serverId clientIds serverOptions
   clients <- forM clientIds $ \clientId -> do
@@ -116,8 +145,8 @@ runSimulation RunOptions{serverOptions,slotLength} events = runSimTrace $ do
     client <$ connectClient client server
   void $ async $ concurrently_
     (runServer trServer server)
-    (forConcurrently_ clients (runClient trClient events serverId slotLength))
-  threadDelay 1e99
+    (forConcurrently_ clients (runClient trClient events serverId opts))
+  threadDelay (durationOf events slotLength)
  where
   tracer :: Tracer (IOSim a) TraceTailSimulation
   tracer = Tracer IOSim.traceM
@@ -133,6 +162,9 @@ data Analyze = Analyze
     -- ^ Throughput as generated by clients
   , actualThroughput :: Double
     -- ^ Actual Throughput measured from confirmed transactions.
+  , transactionPerSnapshot :: Double
+    -- ^ Average number of transactions per snapshot, when looking at the whole system.
+    -- Said differently, the ratio of transactions compared to the number of snapshots.
   , actualWriteNetworkUsage :: NetworkCapacity
     -- ^ Actual write network usage used / needed for running the simulation.
   , actualReadNetworkUsage :: NetworkCapacity
@@ -141,45 +173,71 @@ data Analyze = Analyze
 
 data Metric
   = ConfirmedTxs
+  | Snapshots
   | WriteUsage
   | ReadUsage
   deriving (Generic, Eq, Ord, Enum, Bounded)
 
-analyzeSimulation :: RunOptions -> [Event] -> Trace () -> Analyze
-analyzeSimulation RunOptions{slotLength} events trace =
-  let
-    (metrics, lastKnownTx) = foldTraceEvents fn (zero, 0) trace
-      where
-        zero :: Map Metric Integer
+analyzeSimulation
+  :: forall m. Monad m
+  => (SlotNo -> m ())
+  -> RunOptions
+  -> SimulationSummary
+  -> [Event]
+  -> Trace ()
+  -> m Analyze
+analyzeSimulation notify RunOptions{slotLength} SimulationSummary{numberOfTransactions} events trace = do
+  (metrics, _) <-
+    let zero :: Map Metric Integer
         zero = Map.fromList [ (k, 0) | k <- [minBound .. maxBound] ]
 
-        fn :: (ThreadLabel, Time, TraceTailSimulation) -> (Map Metric Integer, DiffTime) -> (Map Metric Integer, DiffTime)
+        fn :: (ThreadLabel, Time, TraceTailSimulation) -> (Map Metric Integer, SlotNo) -> m (Map Metric Integer, SlotNo)
         fn = \case
-          (_threadLabel, Time t', TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId AckTx{}))) ->
-            (\(!m, !t) -> (Map.adjust (+ 1) ConfirmedTxs m, max t t'))
+          (_threadLabel, _time, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId AckTx{}))) ->
+            (\(!m, !sl) -> pure (Map.adjust (+ 1) ConfirmedTxs m, sl))
+
+          (_threadLabel, _time, TraceServer (TraceServerMultiplexer (MPRecvTrailing _nodeId SnapshotStart{}))) ->
+            (\(!m, !sl) -> pure (Map.adjust (+ 1) Snapshots m, sl))
 
           (_threadLabel, _time, TraceServer (TraceServerMultiplexer (MPRecvLeading _nodeId (Size s)))) ->
-            (\(!m, !t) -> (Map.adjust (+ toInteger s) ReadUsage m, t))
+            (\(!m, !sl) -> pure (Map.adjust (+ toInteger s) ReadUsage m, sl))
 
           (_threadLabel, _time, TraceServer (TraceServerMultiplexer (MPSendLeading _nodeId (Size s)))) ->
-            (\(!m, !t) -> (Map.adjust (+ toInteger s) WriteUsage m, t))
+            (\(!m, !sl) -> pure (Map.adjust (+ toInteger s) WriteUsage m, sl))
 
+          (_threadLabel, _time, TraceClient (TraceClientWakeUp sl')) ->
+            (\(!m, !sl) ->
+              if sl' > sl then
+                notify sl' $> (m, sl')
+              else
+                pure (m, sl)
+            )
           _ ->
-            id
+            pure
 
-    numberOfTransactions =
-      fromIntegral (metrics ! ConfirmedTxs)
+     in foldTraceEvents fn (zero, -1) trace
 
-    maxThroughput =
-      numberOfTransactions / diffTimeToSeconds (durationOf events slotLength)
-    actualThroughput =
-      numberOfTransactions / (1 + diffTimeToSeconds lastKnownTx)
-    actualWriteNetworkUsage =
-      kbitsPerSecond $ (metrics ! WriteUsage) `div` 1024
-    actualReadNetworkUsage =
-      kbitsPerSecond $ (metrics ! ReadUsage) `div` 1024
-   in
-    Analyze{maxThroughput, actualThroughput, actualWriteNetworkUsage, actualReadNetworkUsage}
+  let numberOfConfirmedTransactions =
+        fromIntegral (metrics ! ConfirmedTxs)
+
+  let numberOfSnapshots =
+        fromIntegral (metrics ! Snapshots)
+
+  let duration =
+        diffTimeToSeconds (durationOf events slotLength)
+
+  pure $ Analyze
+    { maxThroughput =
+        fromIntegral (numberOfTransactions ^. #total) / duration
+    , actualThroughput =
+        numberOfConfirmedTransactions / duration
+    , transactionPerSnapshot =
+        numberOfConfirmedTransactions / numberOfSnapshots
+    , actualWriteNetworkUsage =
+        kbitsPerSecond $ (metrics ! WriteUsage) `div` (1024 * round duration)
+    , actualReadNetworkUsage =
+        kbitsPerSecond $ (metrics ! ReadUsage) `div` (1024 * round duration)
+    }
 
 --
 -- (Simplified) Tail-Protocol
@@ -208,6 +266,12 @@ data Msg
   | Disconnect
   -- ^ Client connections and disconnections are modelled using 0-sized messages.
 
+  | SnapshotStart
+  -- ^ Clients informing the server about an ongoing snapshot.
+
+  | SnapshotEnd
+  -- ^ Clients informing the server about the end of a snapshot
+
   --
   -- ↓↓↓ Server messages ↓↓↓
   --
@@ -230,6 +294,10 @@ instance Sized Msg where
     Connect{} ->
       0
     Disconnect{} ->
+      0
+    SnapshotStart{} ->
+      0
+    SnapshotEnd{} ->
       0
     NotifyTx tx ->
       sizeOfHeader + size tx
@@ -255,7 +323,7 @@ data Server m = Server
   , identifier  :: ServerId
   , region :: AWSCenters
   , options :: ServerOptions
-  , registry :: TMVar m (Map ClientId (ClientState, [Msg]))
+  , registry :: TMVar m (Map ClientId (ClientState, [Msg], [Msg]))
   } deriving (Generic)
 
 newServer
@@ -276,7 +344,7 @@ newServer identifier clientIds options@ServerOptions{region,writeCapacity,readCa
  where
   outboundBufferSize = 1000000
   inboundBufferSize = 1000000
-  clients = Map.fromList [ (clientId, (Offline, [])) | clientId <- clientIds ]
+  clients = Map.fromList [ (clientId, (Offline, [], [])) | clientId <- clientIds ]
 
 runServer
   :: forall m. (MonadAsync m, MonadTimer m, MonadThrow m)
@@ -288,46 +356,71 @@ runServer tracer Server{multiplexer, options, registry} = do
     (startMultiplexer (contramap TraceServerMultiplexer tracer) multiplexer)
     (replicateConcurrently_ (options ^. #concurrency) (withLabel "Main: Server" serverMain))
  where
+  reenqueue' = reenqueue (contramap TraceServerMultiplexer tracer)
+
   serverMain :: m ()
   serverMain = do
     atomically (getMessage multiplexer) >>= \case
       (clientId, NewTx tx recipients) -> do
         void $ runComp (txValidate Set.empty tx)
         void $ runComp lookupClient
-        withTMVar registry $ \clients -> do
-          clients' <- flip execStateT clients $ do
-            forM_ recipients $ \recipient -> do
-              modifyM $ updateF clientId $ \case
-                (Offline, mailbox) -> do
-                  let msg = NotifyTx tx
-                  traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
-                  pure $ Just (Offline, msg:mailbox)
-                same -> do
-                  Just same <$ sendTo multiplexer recipient (NotifyTx tx)
-          sendTo multiplexer clientId (AckTx $ txRef tx)
-          return clients'
+
+        blocked <- withTMVar registry $ \clients -> (,clients) <$>
+          Map.traverseMaybeWithKey (matchBlocked recipients) clients
+
+        -- Some of the recipients may be out of their payment window (i.e. 'Blocked'), if
+        -- that's the case, we cannot process the transaction until they are done.
+        if null blocked then
+          withTMVar_ registry $ \clients -> do
+            clients' <- flip execStateT clients $ do
+              forM_ recipients $ \recipient -> do
+                modifyM $ updateF clientId $ \case
+                  (Online, mailbox, queue) -> do
+                    Just (Online, mailbox, queue) <$ sendTo multiplexer recipient (NotifyTx tx)
+                  (st, mailbox, queue) -> do
+                    let msg = NotifyTx tx
+                    traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
+                    pure $ Just (st, msg:mailbox, queue)
+            sendTo multiplexer clientId (AckTx $ txRef tx)
+            return clients'
+        else
+          withTMVar_ registry $ updateF clientId $ \(st, mailbox, queue) ->
+            pure $ Just (st, mailbox, NewTx tx recipients:queue)
         serverMain
 
       (clientId, Pull) -> do
         runComp lookupClient
-        withTMVar registry $ \clients -> do
+        withTMVar_ registry $ \clients -> do
           updateF clientId (\case
-            (st, mailbox) -> do
+            (st, mailbox, queue) -> do
               mapM_ (sendTo multiplexer clientId) (reverse mailbox)
-              pure $ Just (st, [])
+              pure $ Just (st, [], queue)
             ) clients
         serverMain
 
       (clientId, Connect) -> do
         runComp lookupClient
-        withTMVar registry $ \clients -> do
-          return $ Map.update (\(_, mailbox) -> Just (Online, mailbox)) clientId clients
+        withTMVar_ registry $ \clients -> do
+          return $ Map.update (\(_, mailbox, queue) -> Just (Online, mailbox, queue)) clientId clients
         serverMain
 
       (clientId, Disconnect) -> do
         runComp lookupClient
-        withTMVar registry $ \clients -> do
-          return $ Map.update (\(_, mailbox) -> Just (Offline, mailbox)) clientId clients
+        withTMVar_ registry $ \clients -> do
+          return $ Map.update (\(_, mailbox, queue) -> Just (Offline, mailbox, queue)) clientId clients
+        serverMain
+
+      (clientId, SnapshotStart) -> do
+        runComp lookupClient
+        withTMVar_ registry $ \clients -> do
+          return $ Map.update (\(_, mailbox, queue) -> Just (Blocked, mailbox, queue)) clientId clients
+        serverMain
+
+      (clientId, SnapshotEnd) -> do
+        runComp lookupClient
+        withTMVar_ registry $ updateF clientId $ \(_, mailbox, queue) -> do
+          traverse_ (reenqueue' multiplexer) (reverse $ (clientId,) <$> queue)
+          return $ Just (Offline, mailbox, [])
         serverMain
 
       (clientId, msg) ->
@@ -343,6 +436,23 @@ runServer tracer Server{multiplexer, options, registry} = do
 lookupClient :: DelayedComp ()
 lookupClient =
   delayedComp () (picosecondsToDiffTime 500*1e6) -- 500μs
+
+-- | Return 'f (Just Blocked)' iif:
+--
+-- - A client is in the state 'Blocked'
+-- - A client is in given input list of recipients
+--
+matchBlocked
+  :: Applicative f
+  => [ClientId]
+  -> ClientId
+  -> (ClientState, mailbox, blocked)
+  -> f (Maybe ClientState)
+matchBlocked recipients clientId = \case
+  (Blocked, _, _) | clientId `elem` recipients ->
+    pure (Just Blocked)
+  _ ->
+    pure Nothing
 
 data TraceServer
   = TraceServerMultiplexer (TraceMultiplexer Msg)
@@ -366,14 +476,13 @@ instance Exception UnknownClient
 
 type ClientId = NodeId
 
-data ClientState = Online | Offline
+data ClientState = Online | Offline | Blocked
   deriving (Generic, Show, Eq)
 
 data Client m = Client
   { multiplexer :: Multiplexer m Msg
   , identifier  :: ClientId
   , region :: AWSCenters
-  , generator :: StdGen
   } deriving (Generic)
 
 newClient :: MonadSTM m => ClientId -> m (Client m)
@@ -384,74 +493,137 @@ newClient identifier = do
     inboundBufferSize
     (capacity $ kbitsPerSecond 512)
     (capacity $ kbitsPerSecond 512)
-  return Client { multiplexer, identifier, region, generator }
+  return Client { multiplexer, identifier, region }
  where
   outboundBufferSize = 1000
   inboundBufferSize = 1000
   region = LondonAWS
-  generator = mkStdGen (getNodeId identifier)
 
 runClient
   :: forall m. (MonadAsync m, MonadTimer m, MonadThrow m)
   => Tracer m TraceClient
   -> [Event]
   -> ServerId
-  -> DiffTime
+  -> RunOptions
   -> Client m
   -> m ()
-runClient tracer events serverId slotLength Client{multiplexer, identifier} = do
+runClient tracer events serverId opts Client{multiplexer, identifier} = do
+  -- NOTE: We care little about how much each client balance is in practice. Although
+  -- the 'Balance' is modelled as a product (initial, current) because of the intuitive
+  -- view it offers, we are really only interested in the delta. Balances can therefore
+  -- be _negative_ as part of the simulation.
+  balance <- newTVarIO $ initialBalance 0
   concurrently_
     (startMultiplexer (contramap TraceClientMultiplexer tracer) multiplexer)
-    (withLabel ("Main: " <> show identifier) $ clientMain Offline 0 events)
+    (concurrently_
+      (withLabel ("EventLoop: " <> show identifier) $ clientEventLoop (Offline, balance) 0 events)
+      (withLabel ("Main: " <> show identifier) $ forever $ clientMain balance)
+    )
  where
-  clientMain :: ClientState -> SlotNo -> [Event] -> m ()
-  clientMain !st !currentSlot = \case
+  paymentWindow :: Balance -> PaymentWindowStatus
+  paymentWindow = case opts ^. #paymentWindow of
+    Nothing -> const InPaymentWindow
+    Just w  -> newPaymentWindow w
+
+  clientMain :: TVar m Balance -> m ()
+  clientMain balance =
+    atomically (getMessage multiplexer) >>= \case
+      (_, AckTx{}) ->
+        pure ()
+      (_, NotifyTx MockTx{txAmount}) ->
+        -- NOTE: There's a slight _abuse_ here. Transactions are indeed written from the PoV
+        -- of the _sender_. So the amount corresponds to how much did the sender "lost" in the
+        -- transaction, but, there can be multiple recipients! Irrespective of this, we consider
+        -- in the simulation that *each* recipient receives the full amount.
+        atomically $ modifyTVar balance (modifyCurrent (+ txAmount))
+      (nodeId, msg) ->
+        throwIO $ UnexpectedClientMsg nodeId msg
+
+  clientEventLoop :: (ClientState, TVar m Balance) -> SlotNo -> [Event] -> m ()
+  clientEventLoop (!st, !balance) !currentSlot = \case
     [] ->
       pure ()
 
     (e:q) | from e /= identifier ->
-      clientMain st currentSlot q
+      clientEventLoop (st, balance) currentSlot q
+
+    (e@(Event _ _ (NewTx MockTx{txAmount} _)):q) | slot e <= currentSlot -> do
+      atomically (paymentWindow <$> readTVar balance) >>= \case
+        InPaymentWindow -> do
+          sendTo multiplexer serverId (msg e)
+          atomically $ modifyTVar balance (modifyCurrent (\x -> x - txAmount))
+          clientEventLoop (Offline, balance) currentSlot q
+
+        OutOfPaymentWindow -> do
+          sendTo multiplexer serverId SnapshotStart
+          threadDelay (secondsToDiffTime (unSlotNo (opts ^. #settlementDelay)) * opts ^. #slotLength)
+          atomically $ modifyTVar balance (\Balance{current} -> initialBalance current)
+          sendTo multiplexer serverId SnapshotEnd
+          clientEventLoop (Offline, balance) (currentSlot + opts ^. #settlementDelay) (e:q)
 
     (e:q) | slot e <= currentSlot -> do
-      when (st == Offline) $ sendTo multiplexer serverId Connect
+      when (st == Offline) $ do
+        traceWith tracer (TraceClientWakeUp currentSlot)
+        sendTo multiplexer serverId Connect
       sendTo multiplexer serverId (msg e)
-      clientMain Online currentSlot q
+      clientEventLoop (Online, balance) currentSlot q
 
     (e:q) -> do
       when (st == Online) $ sendTo multiplexer serverId Disconnect
-      threadDelay slotLength
-      clientMain Offline (currentSlot + 1) (e:q)
+      threadDelay (opts ^. #slotLength)
+      clientEventLoop (Offline, balance) (currentSlot + 1) (e:q)
+
+data UnexpectedClientMsg = UnexpectedClientMsg NodeId Msg
+  deriving Show
+instance Exception UnexpectedClientMsg
 
 stepClient
   :: forall m. (Monad m)
-  => ClientOptions
-  -> (ClientId -> m [ClientId])
+  => PrepareOptions
   -> SlotNo
-  -> Client m
-  -> m ([Event], Client m)
-stepClient options getRecipients currentSlot client@Client{identifier, generator} = do
-  (events, generator') <- runStateT step generator
-  pure (events, client { generator = generator' })
+  -> ClientId
+  -> StateT StdGen m [Event]
+stepClient options currentSlot identifier = do
+  pOnline <- state (randomR (1, 100))
+  let online = pOnline % 100 <= onlineLikelihood
+  pSubmit <- state (randomR (1, 100))
+  let submit = online && (pSubmit % 100 <= submitLikelihood)
+  recipient <- pickRecipient identifier (options ^. #numberOfClients)
+
+  -- NOTE: The distribution is extrapolated from real mainchain data.
+  amount <- fmap ada $ state $ frequency
+    [ (122, randomR (1, 10))
+    , (144, randomR (10, 100))
+    , (143, randomR (100, 1000))
+    , ( 92, randomR (1000, 10000))
+    , ( 41, randomR (10000, 100000))
+    , ( 12, randomR (100000, 1000000))
+    ]
+
+  -- NOTE: The distribution is extrapolated from real mainchain data.
+  txSize <- fmap Size $ state $ frequency
+    [ (318, randomR (192, 512))
+    , (129, randomR (512, 1024))
+    , (37, randomR (1024, 2048))
+    , (12, randomR (2048, 4096))
+    , (43, randomR (4096, 8192))
+    , (17, randomR (8192, 16384))
+    ]
+
+  pure
+    [ Event currentSlot identifier msg
+    | (predicate, msg) <-
+        [ ( online
+          , Pull
+          )
+        , ( submit
+          , NewTx (mockTx identifier currentSlot amount txSize) [recipient]
+          )
+        ]
+    , predicate
+    ]
  where
-  step :: StateT StdGen m [Event]
-  step = do
-    pOnline <- state (randomR (1, 100))
-    let online = pOnline % 100 <= options ^. #onlineLikelihood
-    pSubmit <- state (randomR (1, 100))
-    let submit = online && (pSubmit % 100 <= options ^. #submitLikelihood)
-    recipients <- lift $ getRecipients identifier
-    pure
-      [ Event currentSlot identifier msg
-      | (predicate, msg) <-
-          [ ( online
-            , Pull
-            )
-          , ( submit
-            , NewTx (mockTx identifier currentSlot defaultTxAmount defaultTxSize) recipients
-            )
-          ]
-      , predicate
-      ]
+  ClientOptions { onlineLikelihood, submitLikelihood } = options ^. #clientOptions
 
 data TraceClient
   = TraceClientMultiplexer (TraceMultiplexer Msg)
@@ -474,12 +646,19 @@ data Event = Event
 data SimulationSummary = SimulationSummary
   { numberOfClients :: !Integer
   , numberOfEvents :: !Integer
-  , numberOfTransactions :: Integer
+  , numberOfTransactions :: !NumberOfTransactions
   , lastSlot :: !SlotNo
   } deriving (Generic, Show)
 
-summarizeEvents :: [Event] -> SimulationSummary
-summarizeEvents events = SimulationSummary
+data NumberOfTransactions = NumberOfTransactions
+  { total :: !Integer
+  , belowPaymentWindow :: !Integer
+  , belowHalfOfPaymentWindow :: !Integer
+  , belowTenthOfPaymentWindow :: !Integer
+  } deriving (Generic, Show)
+
+summarizeEvents :: RunOptions -> [Event] -> SimulationSummary
+summarizeEvents RunOptions{paymentWindow} events = SimulationSummary
   { numberOfClients
   , numberOfEvents
   , numberOfTransactions
@@ -488,7 +667,25 @@ summarizeEvents events = SimulationSummary
  where
   numberOfEvents = toInteger $ length events
   numberOfClients = getNumberOfClients events
-  numberOfTransactions = toInteger $ length [ e | e@(Event _ _ NewTx{}) <- events ]
+  numberOfTransactions = foldl' count (NumberOfTransactions 0 0 0 0) events
+   where
+    w = maybe 1e99 asDouble paymentWindow
+    count st = \case
+      (Event _ _ (NewTx MockTx{txAmount} _)) -> st
+        { total =
+            countIf True st total
+        , belowPaymentWindow =
+            countIf (asDouble txAmount <= w) st belowPaymentWindow
+        , belowHalfOfPaymentWindow =
+            countIf (asDouble txAmount <= (w / 2)) st belowHalfOfPaymentWindow
+        , belowTenthOfPaymentWindow =
+            countIf (asDouble txAmount <= (w / 10)) st belowTenthOfPaymentWindow
+        }
+      _ -> st
+    countIf predicate st get =
+      if predicate then get st + 1 else get st
+    asDouble = fromIntegral @_ @Double . unLovelace
+
   lastSlot = last events ^. #slot
 
 durationOf :: [Event] -> DiffTime -> DiffTime
@@ -497,7 +694,7 @@ durationOf events slotLength =
 
 getNumberOfClients :: [Event] -> Integer
 getNumberOfClients =
-  toInteger . length . nubBy (\a b -> from a == from b)
+  toInteger . getNodeId . from . maximumBy (\a b -> getNodeId (from a) `compare` getNodeId (from b))
 
 data CouldntParseCsv = CouldntParseCsv FilePath
   deriving Show
@@ -527,7 +724,7 @@ eventToCsv = \case
       ]
 
   -- slot,clientId,new-tx,size,amount,recipients
-  Event (SlotNo sl) (NodeId cl) (NewTx (MockTx _ (Size sz) am) rs) ->
+  Event (SlotNo sl) (NodeId cl) (NewTx (MockTx _ (Size sz) (Lovelace am)) rs) ->
     T.intercalate ","
       [ T.pack (show sl)
       , T.pack (show cl)
@@ -570,7 +767,7 @@ eventFromCsv line =
   readSlotNo =
     fmap SlotNo . readMay . T.unpack
 
-  readAmount :: Text -> Maybe Integer
+  readAmount :: Text -> Maybe Lovelace
   readAmount =
     readMay . T.unpack
 
@@ -587,24 +784,24 @@ eventFromCsv line =
 -- Helpers
 --
 
-withTMVar
-  :: MonadSTM m
-  => TMVar m a
-  -> (a -> m a)
-  -> m ()
-withTMVar var action = do
-  atomically (takeTMVar var)
-  >>=
-  action
-  >>=
-  atomically . putTMVar var
-
 getRegion
   :: [AWSCenters]
   -> NodeId
   -> AWSCenters
 getRegion regions (NodeId i) =
   regions !! (i `mod` length regions)
+
+pickRecipient
+  :: Monad m
+  => ClientId
+  -> Integer
+  -> StateT StdGen m ClientId
+pickRecipient (NodeId me) n = do
+  i <- state (randomR (1, n))
+  if i == fromIntegral me then
+    pickRecipient (NodeId me) n
+  else
+    pure $ NodeId (fromIntegral i)
 
 connectClient
   :: (MonadAsync m, MonadTimer m, MonadTime m)
@@ -615,14 +812,3 @@ connectClient client server =
     ( channel (client ^. #region) (server ^. #region) )
     ( client ^. #identifier, client ^. #multiplexer )
     ( server ^. #identifier, server ^. #multiplexer )
-
--- Simple strategy for now to get recipients of a particular client;
--- at the moment, the next client in line is considered a recipient.
-mkGetRecipients
-  :: Applicative m
-  => [Client m]
-  -> ClientId
-  -> m [ClientId]
-mkGetRecipients clients (NodeId sender) = do
-  let recipient = NodeId $ max 1 (succ sender `mod` (length clients + 1))
-  pure [recipient]

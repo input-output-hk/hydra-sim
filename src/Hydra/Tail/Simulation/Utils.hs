@@ -4,14 +4,18 @@ module Hydra.Tail.Simulation.Utils
   ( withLabel
   , modifyM
   , updateF
-  , forEach
   , foldTraceEvents
+  , withTMVar
+  , withTMVar_
+  , frequency
   ) where
 
 import Control.Exception
     ( throw )
 import Control.Monad.Class.MonadFork
     ( MonadThread, labelThread, myThreadId )
+import Control.Monad.Class.MonadSTM
+    ( MonadSTM, TMVar, atomically, putTMVar, takeTMVar )
 import Control.Monad.Class.MonadTime
     ( Time )
 import Control.Monad.IOSim
@@ -19,7 +23,7 @@ import Control.Monad.IOSim
 import Control.Monad.Trans.Class
     ( lift )
 import Control.Monad.Trans.State.Strict
-    ( StateT, get, put )
+    ( StateT, get, put, runState, state )
 import Data.Dynamic
     ( fromDynamic )
 import Data.Generics.Labels
@@ -28,6 +32,8 @@ import Data.Map.Strict
     ( Map )
 import Data.Typeable
     ( Typeable )
+import System.Random
+    ( RandomGen, randomR )
 
 import qualified Data.Map.Strict as Map
 
@@ -61,40 +67,70 @@ updateF k fn =
       fn v
   ) k
 
-forEach
-  :: forall k v m result. (Monad m, Monoid result)
-  => (v -> m (result, v))
-  -> StateT (Map k v) m result
-forEach fn = do
-  elems <- get
-  (result, elems') <- Map.mapAccum (\es (e, v) -> (e<>es, v)) mempty <$> lift (traverse fn elems)
-  result <$ put elems'
-
 foldTraceEvents
-  :: forall a b st. (Typeable b, Show b)
-  => ((ThreadLabel, Time, b) -> st -> st)
+  :: forall a b m st. (Typeable b, Show b, Monad m)
+  => ((ThreadLabel, Time, b) -> st -> m st)
   -> st
   -> Trace a
-  -> st
+  -> m st
 foldTraceEvents fn !st = \case
-  Trace time threadId mThreadLabel (EventLog event) next ->
-    let
-      st' = case (fromDynamic @b event, mThreadLabel) of
-        (Just b, Nothing) ->
-          error $ "unlabeled thread " <> show threadId <> " in " <> show b
-        (Just b, Just threadLabel) ->
-          fn (threadLabel, time, b) st
-        (Nothing, _) ->
-          st
-     in
-      foldTraceEvents fn st' next
+  Trace time threadId mThreadLabel (EventLog event) next -> do
+    st' <- case (fromDynamic @b event, mThreadLabel) of
+      (Just b, Nothing) ->
+        error $ "unlabeled thread " <> show threadId <> " in " <> show b
+      (Just b, Just threadLabel) ->
+        fn (threadLabel, time, b) st
+      (Nothing, _) ->
+        pure st
+    foldTraceEvents fn st' next
   Trace _time _threadId _threadLabel (EventThrow e) _next ->
     throw e
   Trace _time _threadId _threadLabel _event next ->
     foldTraceEvents fn st next
   TraceMainReturn{} ->
-    st
+    pure st
   TraceMainException _ e _ ->
     throw e
   TraceDeadlock{} ->
-    st
+    pure st
+
+-- | Pick a generator from a list of generator given some weights.
+--
+-- >>> frequency [(1, randomR (1, 42)), (10, randomR (42, 1337))] g
+-- (129, g')
+--
+-- In the example above, the second generator of the list has a weigh 10x bigger than the first one, so
+-- it has a much greater chance to run.
+frequency
+  :: RandomGen g
+  => [(Int, g -> (a, g))]
+  -> g
+  -> (a, g)
+frequency generators = runState $ do
+  let total = sum (fst <$> generators)
+  p <- state $ randomR (1, total)
+  state $ pick p generators
+ where
+  pick _ [] = error "frequency: empty list of generators"
+  pick p ((w, gen):rest)
+    | p <= w = gen
+    | otherwise = pick (p - w) rest
+
+withTMVar_
+  :: MonadSTM m
+  => TMVar m a
+  -> (a -> m a)
+  -> m ()
+withTMVar_ var action =
+  withTMVar var (fmap ((),) . action)
+
+withTMVar
+  :: MonadSTM m
+  => TMVar m a
+  -> (a -> m (result, a))
+  -> m result
+withTMVar var action = do
+  a <- atomically (takeTMVar var)
+  (result, a') <- action a
+  atomically (putTMVar var a')
+  return result

@@ -3,7 +3,8 @@ module Main where
 import Prelude
 
 import Hydra.Tail.Simulation
-    ( analyzeSimulation
+    ( SimulationSummary (..)
+    , analyzeSimulation
     , prepareSimulation
     , readEventsThrow
     , runSimulation
@@ -11,7 +12,7 @@ import Hydra.Tail.Simulation
     , writeEvents
     )
 import Hydra.Tail.Simulation.Options
-    ( Command (..), parseCommand )
+    ( Command (..), parseCommand, withProgressReport )
 import Text.Pretty.Simple
     ( pPrint )
 
@@ -26,7 +27,9 @@ main = do
     Run options filepath -> do
       pPrint options
       events <- readEventsThrow filepath
+      let summary = summarizeEvents options events
+      pPrint summary
       let trace = runSimulation options events
-      let analyze = analyzeSimulation options events trace
-      pPrint (summarizeEvents events)
+      analyze <- withProgressReport (lastSlot summary) options $ \reportProgress ->
+        analyzeSimulation reportProgress options summary events trace
       pPrint analyze

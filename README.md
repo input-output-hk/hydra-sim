@@ -18,8 +18,8 @@ The preparation generates clients events from a set of parameters. That is, one 
 $ hydra-tail-simulation prepare \
   --number-of-clients 1000 \
   --duration 60 \
-  --client-online-likelihood 50%100 \
-  --client-submit-likelihood 10%100 
+  --online-likelihood 50%100 \
+  --submit-likelihood 10%100 
   events.csv
 
 PrepareOptions
@@ -41,9 +41,9 @@ To run a simulation, simply provide an events dataset with possibly some custom 
 ```console
 $ hydra-tail-simulation run \
   --slot-length 1s \
-  --server-region LondonAWS \
-  --server-read-capacity 102400 \
-  --server-write-capacity 102400 \
+  --region LondonAWS \
+  --read-capacity 102400 \
+  --write-capacity 102400 \
   events.csv
 
 RunOptions
