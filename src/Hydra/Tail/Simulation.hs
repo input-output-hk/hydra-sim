@@ -143,7 +143,7 @@ prepareSimulation PrepareOptions{clientOptions,numberOfClients,duration} = do
   evalStateT events (Map.fromList $ zip (view #identifier <$> clients) clients)
 
 runSimulation :: RunOptions -> [Event] -> Trace ()
-runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
+runSimulation opts@RunOptions{slotLength,serverOptions} events = runSimTrace $ do
   let (serverId, clientIds) = (0, [1..fromInteger (getNumberOfClients events)])
   server <- newServer serverId clientIds serverOptions
   clients <- forM clientIds $ \clientId -> do
@@ -152,7 +152,7 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
   void $ async $ concurrently_
     (runServer trServer server)
     (forConcurrently_ clients (runClient trClient events serverId opts))
-  threadDelay 1e99
+  threadDelay (durationOf events slotLength)
  where
   tracer :: Tracer (IOSim a) TraceTailSimulation
   tracer = Tracer IOSim.traceM
@@ -180,46 +180,57 @@ data Metric
   | ReadUsage
   deriving (Generic, Eq, Ord, Enum, Bounded)
 
-analyzeSimulation :: forall m. Monad m => (SlotNo -> m ()) -> RunOptions -> [Event] -> Trace () -> m Analyze
-analyzeSimulation notify RunOptions{slotLength} events trace = do
-  (metrics, lastKnownTx, _) <-
+analyzeSimulation
+  :: forall m. Monad m
+  => (SlotNo -> m ())
+  -> RunOptions
+  -> SimulationSummary
+  -> [Event]
+  -> Trace ()
+  -> m Analyze
+analyzeSimulation notify RunOptions{slotLength} SimulationSummary{numberOfTransactions} events trace = do
+  (metrics, _) <-
     let zero :: Map Metric Integer
         zero = Map.fromList [ (k, 0) | k <- [minBound .. maxBound] ]
 
-        fn :: (ThreadLabel, Time, TraceTailSimulation) -> (Map Metric Integer, DiffTime, SlotNo) -> m (Map Metric Integer, DiffTime, SlotNo)
+        fn :: (ThreadLabel, Time, TraceTailSimulation) -> (Map Metric Integer, SlotNo) -> m (Map Metric Integer, SlotNo)
         fn = \case
-          (_threadLabel, Time t', TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId AckTx{}))) ->
-            (\(!m, !t, !sl) -> pure (Map.adjust (+ 1) ConfirmedTxs m, max t t', sl))
+          (_threadLabel, _time, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId AckTx{}))) ->
+            (\(!m, !sl) -> pure (Map.adjust (+ 1) ConfirmedTxs m, sl))
 
           (_threadLabel, _time, TraceServer (TraceServerMultiplexer (MPRecvLeading _nodeId (Size s)))) ->
-            (\(!m, !t, !sl) -> pure (Map.adjust (+ toInteger s) ReadUsage m, t, sl))
+            (\(!m, !sl) -> pure (Map.adjust (+ toInteger s) ReadUsage m, sl))
 
           (_threadLabel, _time, TraceServer (TraceServerMultiplexer (MPSendLeading _nodeId (Size s)))) ->
-            (\(!m, !t, !sl) -> pure (Map.adjust (+ toInteger s) WriteUsage m, t, sl))
+            (\(!m, !sl) -> pure (Map.adjust (+ toInteger s) WriteUsage m, sl))
 
           (_threadLabel, _time, TraceClient (TraceClientWakeUp sl')) ->
-            (\(!m, !t, !sl) ->
+            (\(!m, !sl) ->
               if sl' > sl then
-                notify sl' $> (m, t, sl')
+                notify sl' $> (m, sl')
               else
-                pure (m, t, sl))
-
+                pure (m, sl)
+            )
           _ ->
             pure
-     in foldTraceEvents fn (zero, 0, -1) trace
 
-  let numberOfTransactions =
+     in foldTraceEvents fn (zero, -1) trace
+
+  let numberOfConfirmedTransactions =
         fromIntegral (metrics ! ConfirmedTxs)
+
+  let duration =
+        diffTimeToSeconds (durationOf events slotLength)
 
   pure $ Analyze
     { maxThroughput =
-        numberOfTransactions / diffTimeToSeconds (durationOf events slotLength)
+        fromIntegral numberOfTransactions / duration
     , actualThroughput =
-        numberOfTransactions / (1 + diffTimeToSeconds lastKnownTx)
+        numberOfConfirmedTransactions / duration
     , actualWriteNetworkUsage =
-        kbitsPerSecond $ (metrics ! WriteUsage) `div` 1024
+        kbitsPerSecond $ (metrics ! WriteUsage) `div` (1024 * round duration)
     , actualReadNetworkUsage =
-        kbitsPerSecond $ (metrics ! ReadUsage) `div` 1024
+        kbitsPerSecond $ (metrics ! ReadUsage) `div` (1024 * round duration)
     }
 
 --
