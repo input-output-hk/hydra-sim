@@ -3,7 +3,8 @@ module Main where
 import Prelude
 
 import Hydra.Tail.Simulation
-    ( analyzeSimulation
+    ( SimulationSummary (..)
+    , analyzeSimulation
     , prepareSimulation
     , readEventsThrow
     , runSimulation
@@ -11,7 +12,7 @@ import Hydra.Tail.Simulation
     , writeEvents
     )
 import Hydra.Tail.Simulation.Options
-    ( Command (..), RunOptions (..), Verbosity (..), parseCommand )
+    ( Command (..), parseCommand, withProgressReport )
 import Text.Pretty.Simple
     ( pPrint )
 
@@ -29,9 +30,6 @@ main = do
       let summary = summarizeEvents events
       pPrint summary
       let trace = runSimulation options events
-      analyze <- analyzeSimulation (reportProgress options) options summary events trace
+      analyze <- withProgressReport (lastSlot summary) options $ \reportProgress ->
+        analyzeSimulation reportProgress options summary events trace
       pPrint analyze
- where
-  reportProgress options = case verbosity options of
-    Verbose -> putStrLn . ("..." <>) . show
-    Quiet -> const (pure ())

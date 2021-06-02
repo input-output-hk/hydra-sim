@@ -15,13 +15,15 @@ module Hydra.Tail.Simulation.Options
   , kbitsPerSecond
 
   , Verbosity (..)
+
+  , withProgressReport
   ) where
 
 import Options.Applicative
 import Prelude
 
 import Control.Monad
-    ( guard )
+    ( guard, when )
 import Data.Ratio
     ( (%) )
 import Data.Time.Clock
@@ -30,6 +32,10 @@ import GHC.Generics
     ( Generic )
 import Safe
     ( initMay, lastMay, readMay )
+import System.Console.ANSI
+    ( hClearLine, setCursorColumn )
+import System.IO
+    ( BufferMode (..), hSetBuffering, hSetEncoding, stdout, utf8 )
 
 import Hydra.Tail.Simulation.PaymentWindow
     ( Lovelace, ada )
@@ -255,7 +261,7 @@ kbitsPerSecond rate =
 -- Helpers / Internal
 --
 
-data Verbosity = Verbose | Quiet deriving Show
+data Verbosity = Verbose | Quiet deriving (Show, Eq)
 
 readSlotNo :: String -> Maybe SlotNo
 readSlotNo = fmap SlotNo . readMay
@@ -285,3 +291,23 @@ networkCapacityOption readOrWrite defaultValue =
     <> help ("server " <> readOrWriteS <> " network capacity, in KBits/s.")
  where
   readOrWriteS = prettyReadOrWrite readOrWrite
+
+withProgressReport
+  :: SlotNo
+  -> RunOptions
+  -> ((SlotNo -> IO ()) -> IO a)
+  -> IO a
+withProgressReport lastSlot options io = do
+  hSetBuffering stdout NoBuffering
+  hSetEncoding stdout utf8
+  a <- case verbosity options of
+    Verbose -> io $ \(SlotNo sl) -> do
+      setCursorColumn 0
+      putStr $ spinner sl <> " SlotNo " <> show sl <> "/" <> show (unSlotNo lastSlot)
+    Quiet ->
+      io $ \_sl -> pure ()
+  when (verbosity options == Verbose) (hClearLine stdout >> setCursorColumn 0)
+  return a
+ where
+  spinner :: Integer -> String
+  spinner i = ["◰◳◲◱" !! (fromIntegral i `mod` 4)]

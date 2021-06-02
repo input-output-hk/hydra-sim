@@ -121,7 +121,7 @@ executable hydra-tail-simulation
   build-depends:       base
                      , hydra-sim -any
                      , pretty-simple
-  ghc-options:         -O2 -threaded -rtsopts "-with-rtsopts=-T -N2"
+  ghc-options:         -O2 -threaded -rtsopts
 
 executable hydra-head-simulation
   import: project-config
