@@ -16,12 +16,10 @@ const reader = await downloadIfMissing('blocks.json', filepath => {
 });
 
 const numberOfClients = parseInt(process.argv[2], 10);
-assert(typeof numberOfClients === 'number', 'Expected number of clients as 1st argument (e.g. 1000)');
+assert(typeof numberOfClients === 'number', 'Expected number of clients as 1st argument to be a number (e.g. 1000)');
 
 const compression = parseInt(process.argv[3], 10);
-assert(typeof compression === 'number' && compression > 1, 'Expected compression rate as 2nd argument (e.g. 10)');
-
-const writer = fs.createWriteStream("out");
+assert(typeof compression === 'number' && compression > 1, 'Expected compression rate as 2nd argument to be a number (e.g. 10)');
 
 await reader
   .pipe(viewViaStakeKeys())
