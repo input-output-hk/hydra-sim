@@ -1,5 +1,7 @@
 module Hydra.Tail.Simulation.MockTx
   ( MockTx(..)
+  , sent
+  , received
   , validationTime
   , mockTx
   ) where
@@ -38,6 +40,14 @@ data MockTx = MockTx
   , txSize :: Size
   , txAmount :: Lovelace
   } deriving (Eq, Ord, Show)
+
+sent :: MockTx -> Lovelace
+sent =
+  txAmount
+
+received :: MockTx -> [NodeId] -> Lovelace
+received tx recipients = Lovelace $
+  unLovelace (txAmount tx) `div` toInteger (length recipients)
 
 instance Tx MockTx where
   newtype TxRef MockTx = TxRef Text

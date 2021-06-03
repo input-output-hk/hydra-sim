@@ -7,7 +7,7 @@ module Hydra.Tail.Simulation.PaymentWindow
   , Lovelace (..)
   , ada
   , PaymentWindowStatus (..)
-  , newPaymentWindow
+  , viewPaymentWindow
   ) where
 
 import Prelude
@@ -51,8 +51,8 @@ data PaymentWindowStatus
   | OutOfPaymentWindow
   deriving (Generic)
 
-newPaymentWindow :: Lovelace -> Balance -> PaymentWindowStatus
-newPaymentWindow w Balance{initial,current}
-  | current <= initial - w = OutOfPaymentWindow
-  | current >= initial + w = OutOfPaymentWindow
+viewPaymentWindow :: Lovelace -> Balance -> Lovelace -> PaymentWindowStatus
+viewPaymentWindow w Balance{initial,current} payment
+  | current + payment < initial - w = OutOfPaymentWindow
+  | current + payment > initial + w = OutOfPaymentWindow
   | otherwise = InPaymentWindow
