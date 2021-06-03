@@ -28,3 +28,20 @@ export function readCsvFileSync(filepath) {
     .slice(1)
     .map(s => s.split(","));
 }
+
+export function zip(xs, ys) {
+  return xs.reduce((acc, x, i) => {
+    if (i < ys.length) {
+      acc.push([x, ys[i]])
+    }
+    return acc;
+  }, [])
+}
+
+export function unzip(xs) {
+  return xs.reduce((acc, [x,y]) => {
+    acc[0].push(x)
+    acc[1].push(y)
+    return acc;
+  }, [[],[]])
+}
