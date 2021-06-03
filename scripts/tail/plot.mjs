@@ -12,12 +12,25 @@ assert(typeof inputFile === 'string', 'Expected input filepath as 1st argument')
 
 const events = readCsvFileSync(inputFile);
 
+const [total, count] = events
+  .reduce(([total, count], [_0, _1, _2, _3, amt]) => {
+    if (amt) {
+      return [total + Number(amt), count + 1]
+    } else {
+      return [total, count];
+    }
+
+  }, [0,0]);
+
+console.log("Average transaction amount:", Math.round(total/(1e6 * count)));
+
 await
   [ ["datasets/plots/sizes.svg", sizes]
   , ["datasets/plots/amounts.svg", amounts]
   , ["datasets/plots/recipients.svg", recipients]
   , ["datasets/plots/volume-usd.svg", volume]
   , ["datasets/plots/density.svg", density]
+  , ["datasets/plots/received-vs-sent.svg", receivedVsSent]
   ].forEach(async ([filepath, fn]) => {
     console.log(`Plotting: ${filepath}`);
     fs.writeFileSync(filepath, await fn(events));
@@ -32,6 +45,10 @@ fs.writeFileSync("datasets/README.md", `> _generated from: \`${inputFile}\`_
 ### Transactions amounts
 
 ![](./plots/amounts.svg)
+
+### Received vs Sent Payments
+
+![](./plots/received-vs-sent.svg)
 
 ### Number of recipients
 
@@ -75,6 +92,62 @@ async function sizes(events) {
         label: "transaction size (bytes)",
         backgroundColor: "#e55039",
         data
+      }],
+    },
+  };
+
+  return chartJSNodeCanvas.renderToBuffer(configuration);
+}
+
+async function receivedVsSent(events) {
+  const receivedAndSent = events
+    .reduce((acc, [_0, clientId, _2, _3, amt, recipients]) => {
+      if (amt) {
+        acc[clientId] = acc[clientId] || { received: 0, sent: 0 };
+        acc[clientId].sent += Number(amt);
+
+        recipients.split(" ").forEach(recipientId => {
+          acc[recipientId] = acc[recipientId] || { received: 0, sent: 0 };
+          acc[recipientId].received += Number(amt);
+        });
+      }
+
+      return acc;
+    }, {})
+
+  const bounds =
+    [ [[0, 4], "~"]
+    , [[4, Number.POSITIVE_INFINITY], "🠕"]
+    ];
+
+  const data = bounds.map(([[inf, sup], _]) => Object.keys(receivedAndSent)
+    .filter(clientId => {
+      const { sent, received } = receivedAndSent[clientId];
+      const r = received / sent;
+
+      return (r >= 1/(1+sup) && r < 1/(1+inf)) || (r <= 1+sup && r > 1+inf)
+    })
+    .length
+  );
+
+  const labels = bounds.map(([_, lbl]) => lbl);
+
+  const backgroundColor =
+    [ "#786fa6"
+    , "#cf6a87"
+    , "#63cdda"
+    , "#596275"
+    , "#e77f67"
+    , "#f7d794"
+    ]
+
+  const configuration = {
+    type: 'pie',
+    data: {
+      labels,
+      datasets: [{
+        backgroundColor,
+        data,
       }],
     },
   };
@@ -165,19 +238,14 @@ async function volume(events) {
   }, {});
 
   const labels = Object.keys(volumePerSlot).sort((a,b) => a-b);
-  const data = labels.map(slot => volumePerSlot[slot]);
+  const data = labels.map(slot => volumePerSlot[slot] / 1e6);
 
   const configuration = {
     type: 'line',
     options: {
       scales: {
-        x: {
-          display: true,
-        },
-        y: {
-          display: true,
-          type: 'logarithmic',
-        }
+        x: { display: true, },
+        y: { display: true, type: 'logarithmic', }
       }
     },
     data: {
@@ -209,13 +277,8 @@ async function density(events) {
     type: 'line',
     options: {
       scales: {
-        x: {
-          display: true,
-        },
-        y: {
-          display: true,
-          type: 'logarithmic',
-        }
+        x: { display: true, },
+        y: { display: true, type: 'logarithmic', }
       }
     },
     data: {
