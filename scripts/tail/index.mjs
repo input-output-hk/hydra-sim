@@ -21,7 +21,10 @@ assert(typeof numberOfClients === 'number', 'Expected number of clients as 1st a
 const compression = parseInt(process.argv[3], 10);
 assert(typeof compression === 'number' && compression > 1, 'Expected compression rate as 2nd argument to be a number (e.g. 10)');
 
+const maxSlot = parseInt(process.argv[4] || 1e99, 10);
+assert(typeof maxSlot === 'number' && maxSlot > 1, 'Expected maxSlot rate as 3rd argument to be a number (e.g. 500)');
+
 await reader
   .pipe(viewViaStakeKeys())
-  .pipe(createEvents({ numberOfClients, compression }))
+  .pipe(createEvents({ numberOfClients, compression, maxSlot }))
   .pipe(lineSeparatedFile(`datasets/events-clients:${numberOfClients}-compression:${compression}.csv`));
