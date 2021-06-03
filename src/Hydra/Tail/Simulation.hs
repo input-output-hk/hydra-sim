@@ -73,11 +73,13 @@ import Hydra.Tail.Simulation.Options
     , kbitsPerSecond
     )
 import Hydra.Tail.Simulation.PaymentWindow
-    ( Balance (..)
+    ( Ada (..)
+    , Balance (..)
     , Lovelace (..)
     , PaymentWindowStatus (..)
     , ada
     , initialBalance
+    , lovelace
     , modifyCurrent
     , viewPaymentWindow
     )
@@ -137,9 +139,20 @@ runSimulation opts@RunOptions{slotLength,serverOptions} events = runSimTrace $ d
     client <$ connectClient client server
   void $ async $ concurrently_
     (runServer trServer opts server)
-    (forConcurrently_ clients (runClient trClient events serverId opts))
+    (forConcurrently_ clients (runClient trClient (trim events) serverId opts))
   threadDelay (durationOf events slotLength)
  where
+  -- We remove any transaction that is above the payment window, for they are
+  -- actually unprocessable by the server (theoritically, transactions can be as
+  -- large as 2*W, but even after a snapshot, accepting a transaction larger than W
+  -- would require the client to first spend the difference. For simplicity, we
+  -- consider that the server would reject any transaction larger than `W`, so we
+  -- filter them out of the simulation if any.
+  trim = filter $ \case
+    Event _ _ (NewTx tx _) ->
+      maybe True (\w -> sent tx <= lovelace w) (opts ^. #paymentWindow)
+    _ -> True
+
   tracer :: Tracer (IOSim a) TraceTailSimulation
   tracer = Tracer IOSim.traceM
 
@@ -212,7 +225,7 @@ analyzeSimulation notify RunOptions{slotLength} SimulationSummary{numberOfTransa
 
   pure $ Analyze
     { maxThroughput =
-        fromIntegral (numberOfTransactions ^. #total) / duration
+        fromIntegral (numberOfTransactions ^. #belowPaymentWindow) / duration
     , actualThroughput =
         numberOfConfirmedTransactions / duration
     , actualWriteNetworkUsage =
@@ -440,7 +453,7 @@ lookupClient =
 -- in the simulation that *each* recipient receives the full amount.
 matchBlocked
   :: Applicative f
-  => Maybe Lovelace
+  => Maybe Ada
   -> (ClientId, MockTx, [ClientId])
   -> ClientId
   -> (st, Balance, mailbox, pending)
@@ -449,14 +462,14 @@ matchBlocked Nothing _ _ _ =
   pure Nothing
 matchBlocked (Just paymentWindow) (sender, tx, recipients) clientId (_, balance, _, _)
   | clientId `elem` recipients =
-      case viewPaymentWindow paymentWindow balance (received tx recipients) of
+      case viewPaymentWindow (lovelace paymentWindow) balance (received tx recipients) of
         InPaymentWindow ->
           pure Nothing
         OutOfPaymentWindow ->
           pure (Just clientId)
 
   | clientId == sender =
-      case viewPaymentWindow paymentWindow balance (negate $ sent tx) of
+      case viewPaymentWindow (lovelace paymentWindow) balance (negate $ sent tx) of
         InPaymentWindow ->
           pure Nothing
         OutOfPaymentWindow ->
@@ -589,7 +602,7 @@ stepClient options currentSlot identifier = do
   recipient <- pickRecipient identifier (options ^. #numberOfClients)
 
   -- NOTE: The distribution is extrapolated from real mainchain data.
-  amount <- fmap ada $ state $ frequency
+  amount <- fmap Ada $ state $ frequency
     [ (122, randomR (1, 10))
     , (144, randomR (10, 100))
     , (143, randomR (100, 1000))
@@ -615,7 +628,7 @@ stepClient options currentSlot identifier = do
           , Pull
           )
         , ( submit
-          , NewTx (mockTx identifier currentSlot amount txSize) [recipient]
+          , NewTx (mockTx identifier currentSlot (lovelace amount) txSize) [recipient]
           )
         ]
     , predicate
@@ -645,6 +658,7 @@ data SimulationSummary = SimulationSummary
   { numberOfClients :: !Integer
   , numberOfEvents :: !Integer
   , numberOfTransactions :: !NumberOfTransactions
+  , averageTransaction :: !Ada
   , lastSlot :: !SlotNo
   } deriving (Generic, Show)
 
@@ -660,30 +674,35 @@ summarizeEvents RunOptions{paymentWindow} events = SimulationSummary
   { numberOfClients
   , numberOfEvents
   , numberOfTransactions
+  , averageTransaction
   , lastSlot
   }
  where
   numberOfEvents = toInteger $ length events
   numberOfClients = getNumberOfClients events
-  numberOfTransactions = foldl' count (NumberOfTransactions 0 0 0 0) events
+  (volumeTotal, numberOfTransactions) = foldl' count (0, NumberOfTransactions 0 0 0 0) events
    where
-    w = maybe 1e99 asDouble paymentWindow
-    count st = \case
-      (Event _ _ (NewTx MockTx{txAmount} _)) -> st
-        { total =
-            countIf True st total
-        , belowPaymentWindow =
-            countIf (asDouble txAmount <= w) st belowPaymentWindow
-        , belowHalfOfPaymentWindow =
-            countIf (asDouble txAmount <= (w / 2)) st belowHalfOfPaymentWindow
-        , belowTenthOfPaymentWindow =
-            countIf (asDouble txAmount <= (w / 10)) st belowTenthOfPaymentWindow
-        }
-      _ -> st
+    w = maybe 1e99 (asDouble . lovelace) paymentWindow
+    count (!volume, st) = \case
+      (Event _ _ (NewTx MockTx{txAmount} _)) ->
+        ( volume + if asDouble txAmount <= w then txAmount else 0
+        , st
+          { total =
+              countIf True st total
+          , belowPaymentWindow =
+              countIf (asDouble txAmount <= w) st belowPaymentWindow
+          , belowHalfOfPaymentWindow =
+              countIf (asDouble txAmount <= (w / 2)) st belowHalfOfPaymentWindow
+          , belowTenthOfPaymentWindow =
+              countIf (asDouble txAmount <= (w / 10)) st belowTenthOfPaymentWindow
+          }
+        )
+      _ -> (volume, st)
     countIf predicate st get =
       if predicate then get st + 1 else get st
     asDouble = fromIntegral @_ @Double . unLovelace
-
+  averageTransaction =
+    ada $ Lovelace $ unLovelace volumeTotal `div` (numberOfTransactions ^. #belowPaymentWindow)
   lastSlot = last events ^. #slot
 
 durationOf :: [Event] -> DiffTime -> DiffTime

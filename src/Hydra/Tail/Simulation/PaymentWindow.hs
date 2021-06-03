@@ -4,8 +4,10 @@ module Hydra.Tail.Simulation.PaymentWindow
   ( Balance (..)
   , initialBalance
   , modifyCurrent
-  , Lovelace (..)
+  , Ada (..)
   , ada
+  , Lovelace (..)
+  , lovelace
   , PaymentWindowStatus (..)
   , viewPaymentWindow
   ) where
@@ -17,13 +19,21 @@ import GHC.Generics
 import Quiet
     ( Quiet (..) )
 
+newtype Ada = Ada { unAda :: Integer }
+  deriving stock (Eq, Ord, Generic)
+  deriving Show via Quiet Ada
+  deriving (Read, Num, Enum) via Integer
+
 newtype Lovelace = Lovelace { unLovelace :: Integer }
   deriving stock (Eq, Ord, Generic)
   deriving Show via Quiet Lovelace
   deriving (Read, Num, Enum) via Integer
 
-ada :: Integer -> Lovelace
-ada = Lovelace . (* 1_000_000)
+lovelace :: Ada -> Lovelace
+lovelace (Ada x) = Lovelace (x * 1_000_000)
+
+ada :: Lovelace -> Ada
+ada (Lovelace x) = Ada (x `div` 1_000_000)
 
 data Balance = Balance
   { initial :: Lovelace

@@ -38,7 +38,7 @@ import System.IO
     ( BufferMode (..), hSetBuffering, hSetEncoding, stdout, utf8 )
 
 import Hydra.Tail.Simulation.PaymentWindow
-    ( Lovelace, ada )
+    ( Ada (..) )
 import Hydra.Tail.Simulation.SlotNo
     ( SlotNo (..) )
 import HydraSim.Examples.Channels
@@ -92,7 +92,7 @@ data PrepareOptions = PrepareOptions
 data RunOptions = RunOptions
   { slotLength :: DiffTime
     -- ^ Slot length
-  , paymentWindow :: Maybe Lovelace
+  , paymentWindow :: Maybe Ada
     -- ^ payment window parameter (a.k.a W), that is, the budget of each client before needing a snapshot.
   , settlementDelay :: SlotNo
     -- ^ Number of slots needed for a snapshot to be settled.
@@ -140,8 +140,8 @@ slotLengthOption = option (maybeReader readDiffTime) $ mempty
   <> showDefault
   <> help "Length of slot in seconds considered for the simulation."
 
-paymentWindowOption :: Parser Lovelace
-paymentWindowOption = fmap ada $ option auto $ mempty
+paymentWindowOption :: Parser Ada
+paymentWindowOption = fmap Ada $ option auto $ mempty
   <> long "payment-window"
   <> metavar "ADA"
   <> help "Payment window parameter (a.k.a. `W`), that is, the budget of each client before needing a snapshot."
