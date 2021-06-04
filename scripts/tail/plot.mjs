@@ -12,18 +12,6 @@ assert(typeof inputFile === 'string', 'Expected input filepath as 1st argument')
 
 const events = readCsvFileSync(inputFile);
 
-const [total, count] = events
-  .reduce(([total, count], [_0, _1, _2, _3, amt]) => {
-    if (amt) {
-      return [total + Number(amt), count + 1]
-    } else {
-      return [total, count];
-    }
-
-  }, [0,0]);
-
-console.log("Average transaction amount:", Math.round(total/(1e6 * count)));
-
 await
   [ ["datasets/plots/sizes.svg", sizes]
   , ["datasets/plots/amounts.svg", amounts]
