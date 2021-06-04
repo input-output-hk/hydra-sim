@@ -2,29 +2,12 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 
-const CONCURRENCY = 5;
+const CONCURRENCY = 3;
 const __dirname = path.resolve();
 
 const matrix =
-  // Number of Clients
-  [ { "window": 10000, "delay": 120, numberOfClients: 15000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients: 14000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients: 13000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients: 12000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients: 11000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients: 10000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients:  9000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients:  8000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients:  7000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients:  6000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients:  5000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients:  4000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients:  3000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients:  2000, compression: 20000 }
-  , { "window": 10000, "delay": 120, numberOfClients:  1000, compression: 20000 }
-
   // Compression / Density
-  , { "window": 10000, "delay": 120, numberOfClients: 1000,  compression:  1000 }
+  [ { "window": 10000, "delay": 120, numberOfClients: 1000,  compression:  1000 }
   , { "window": 10000, "delay": 120, numberOfClients: 1000,  compression:  2500 }
   , { "window": 10000, "delay": 120, numberOfClients: 1000,  compression:  5000 }
   , { "window": 10000, "delay": 120, numberOfClients: 1000,  compression: 10000 }
@@ -62,32 +45,51 @@ const matrix =
   , { "window":  20000, "delay": 120, numberOfClients: 1000,  compression: 20000 }
   , { "window":  25000, "delay": 120, numberOfClients: 1000,  compression: 20000 }
   , { "window":  50000, "delay": 120, numberOfClients: 1000,  compression: 20000 }
+
+  // Number of Clients
+  , { "window": 10000, "delay": 120, numberOfClients:  1000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients:  2000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients:  3000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients:  4000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients:  5000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients:  6000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients:  7000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients:  8000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients:  9000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients: 10000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients: 11000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients: 12000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients: 13000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients: 14000, compression: 20000 }
+  , { "window": 10000, "delay": 120, numberOfClients: 15000, compression: 20000 }
   ]
 
-for (let i = 0; i < (matrix.length + CONCURRENCY); i += CONCURRENCY) {
-  let pipelines = [];
+let cursor = 0;
+let pipeline = [];
+for (let i = 0; i < CONCURRENCY; i += 1) {
+  pipeline.push(schedule())
+}
+await Promise.all(pipeline);
 
-  for (let j = 0; j < CONCURRENCY; j += 1) {
-    if (matrix[i+j]) {
-      const { window, delay, numberOfClients, compression } = matrix[i+j];
-      console.log(`Running simulation ${JSON.stringify(matrix[i+j])}`);
-      const filename = `events-clients:${numberOfClients}-compression:${compression}`;
-      const writer = fs.createWriteStream(path.join(__dirname, "..", "..", `${filename}-window:${window}-delay:${delay}-clients:${numberOfClients}`));
-      const pipeline = spawn("hydra-tail-simulation", [ "run"
-        , "--payment-window", window
-        , "--settlement-delay", delay
-        , path.join(__dirname, "datasets", `${filename}.csv`)
-        ])
-      const promise = new Promise((resolve) => {
-        pipeline.stdout.on('data', chunk => writer.write(chunk));
-        pipeline.on('close', () => {
-          writer.end();
-          resolve()
-        });
+async function schedule() {
+  if (matrix[cursor]) {
+    const { window, delay, numberOfClients, compression } = matrix[cursor];
+    console.log(`Running simulation ${JSON.stringify(matrix[cursor])}`);
+    cursor += 1;
+    const filename = `events-clients:${numberOfClients}-compression:${compression}`;
+    const writer = fs.createWriteStream(path.join(__dirname, "..", "..", `${filename}-window:${window}-delay:${delay}-clients:${numberOfClients}`));
+    const pipeline = spawn("hydra-tail-simulation", [ "run"
+      , "--payment-window", window
+      , "--settlement-delay", delay
+      , path.join(__dirname, "datasets", `${filename}.csv`)
+      ])
+    const promise = new Promise((resolve) => {
+      pipeline.stdout.on('data', chunk => writer.write(chunk));
+      pipeline.on('close', () => {
+        writer.end();
+        resolve()
       });
-      pipelines.push(promise);
-    }
+    });
+    return promise.then(schedule)
   }
-
-  await Promise.all(pipelines);
 }
