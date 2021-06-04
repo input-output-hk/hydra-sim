@@ -27,6 +27,8 @@ import Control.Monad.Class.MonadTimer
     ( MonadTimer, threadDelay )
 import Control.Monad.IOSim
     ( IOSim, ThreadLabel, Trace (..), runSimTrace )
+import Control.Monad.Trans.Class
+    ( lift )
 import Control.Monad.Trans.State.Strict
     ( StateT, evalStateT, execStateT, state )
 import Control.Tracer
@@ -168,6 +170,8 @@ data Analyze = Analyze
   , actualThroughput :: Double
     -- ^ Actual Throughput measured from confirmed transactions.
     -- Said differently, the ratio of transactions compared to the number of snapshots.
+  , averageSnapshotPerClient :: Double
+    -- ^ Average numer of snapshots per client over the simulation.
   , actualWriteNetworkUsage :: NetworkCapacity
     -- ^ Actual write network usage used / needed for running the simulation.
   , actualReadNetworkUsage :: NetworkCapacity
@@ -189,7 +193,7 @@ analyzeSimulation
   -> [Event]
   -> Trace ()
   -> m Analyze
-analyzeSimulation notify RunOptions{slotLength} SimulationSummary{numberOfTransactions} events trace = do
+analyzeSimulation notify RunOptions{slotLength} SimulationSummary{numberOfClients,numberOfTransactions} events trace = do
   (metrics, _) <-
     let zero :: Map Metric Integer
         zero = Map.fromList [ (k, 0) | k <- [minBound .. maxBound] ]
@@ -198,6 +202,9 @@ analyzeSimulation notify RunOptions{slotLength} SimulationSummary{numberOfTransa
         fn = \case
           (_threadLabel, _time, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId AckTx{}))) ->
             (\(!m, !sl) -> pure (Map.adjust (+ 1) ConfirmedTxs m, sl))
+
+          (_threadLabel, _time, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId NeedSnapshot{}))) ->
+            (\(!m, !sl) -> pure (Map.adjust (+ 1) Snapshots m, sl))
 
           (_threadLabel, _time, TraceServer (TraceServerMultiplexer (MPRecvLeading _nodeId (Size s)))) ->
             (\(!m, !sl) -> pure (Map.adjust (+ toInteger s) ReadUsage m, sl))
@@ -220,6 +227,9 @@ analyzeSimulation notify RunOptions{slotLength} SimulationSummary{numberOfTransa
   let numberOfConfirmedTransactions =
         fromIntegral (metrics ! ConfirmedTxs)
 
+  let numberOfSnapshots =
+        fromIntegral (metrics ! Snapshots)
+
   let duration =
         diffTimeToSeconds (durationOf events slotLength)
 
@@ -228,6 +238,8 @@ analyzeSimulation notify RunOptions{slotLength} SimulationSummary{numberOfTransa
         fromIntegral (numberOfTransactions ^. #belowPaymentWindow) / duration
     , actualThroughput =
         numberOfConfirmedTransactions / duration
+    , averageSnapshotPerClient =
+        numberOfSnapshots / fromIntegral numberOfClients
     , actualWriteNetworkUsage =
         kbitsPerSecond $ (metrics ! WriteUsage) `div` (1024 * round duration)
     , actualReadNetworkUsage =
@@ -378,27 +390,32 @@ runServer tracer options Server{multiplexer, registry} = do
                   (matchBlocked (options ^. #paymentWindow) (clientId, tx, recipients))
                   clients
         if not (null blocked) then do
-          forM_ blocked $ flip (sendTo multiplexer) NeedSnapshot
-          withTMVar_ registry $ updateF clientId $ \(st, balance, mailbox, pending) ->
-            pure $ Just (st, balance, mailbox, NewTx tx recipients:pending)
+          withTMVar_ registry $ execStateT $ do
+            forM_ (zip [0..] (Map.elems blocked)) $ \case
+              (ix, (client, Just NeedSnapshot)) -> do
+                lift $ sendTo multiplexer client NeedSnapshot
+                modifyM $ updateF client $ \(_st, balance, mailbox, pending) -> do
+                  let pending' = if ix == (0 :: Int) then NewTx tx recipients:pending else pending
+                  pure $ Just (Blocked, balance, mailbox, pending')
+              _ -> do
+                pure () -- Already blocked, and snapshot already requested.
 
         else do
-          withTMVar_ registry $ \clients -> do
-            clients' <- flip execStateT clients $ do
-              forM_ recipients $ \recipient -> do
-                modifyM $ updateF clientId $ \case
-                  (Online, balance, mailbox, pending) -> do
-                    sendTo multiplexer recipient (NotifyTx tx)
-                    pure $ Just (Online, modifyCurrent (+ received tx recipients) balance , mailbox, pending)
-                  (st, balance, mailbox, pending) -> do
-                    let msg = NotifyTx tx
-                    traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
-                    pure $ Just (st, modifyCurrent (+ received tx recipients) balance, msg:mailbox, pending)
-              modifyM $ updateF clientId $ \(st, balance, mailbox, pending) ->
-                pure $ Just (st, modifyCurrent (\x -> x - sent tx) balance, mailbox, pending)
-            sendTo multiplexer clientId (AckTx $ txRef tx)
-            return clients'
+          withTMVar_ registry $ execStateT $ do
+            forM_ recipients $ \recipient -> do
+              modifyM $ updateF recipient $ \case
+                (Online, balance, mailbox, pending) -> do
+                  sendTo multiplexer recipient (NotifyTx tx)
+                  pure $ Just (Online, modifyCurrent (+ received tx recipients) balance , mailbox, pending)
+                (st, balance, mailbox, pending) -> do
+                  let msg = NotifyTx tx
+                  traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
+                  pure $ Just (st, modifyCurrent (+ received tx recipients) balance, msg:mailbox, pending)
 
+            modifyM $ updateF clientId $ \(st, balance, mailbox, pending) ->
+              pure $ Just (st, modifyCurrent (\x -> x - sent tx) balance, mailbox, pending)
+
+          sendTo multiplexer clientId (AckTx $ txRef tx)
         serverMain
 
       (clientId, Pull) -> do
@@ -425,9 +442,9 @@ runServer tracer options Server{multiplexer, registry} = do
 
       (clientId, SnapshotDone) -> do
         runComp lookupClient
-        withTMVar_ registry $ updateF clientId $ \(st, Balance{current}, mailbox, pending) -> do
+        withTMVar_ registry $ updateF clientId $ \(_st, Balance{current}, mailbox, pending) -> do
           traverse_ (reenqueue' multiplexer) (reverse $ (clientId,) <$> pending)
-          return $ Just (st, initialBalance current, mailbox, [])
+          return $ Just (Offline, initialBalance current, mailbox, [])
         serverMain
 
       (clientId, msg) ->
@@ -445,7 +462,7 @@ lookupClient =
   delayedComp () (picosecondsToDiffTime 500*1e6) -- 500μs
 
 -- | Return 'f (Just ClientId)' iif a client would exceed (bottom or top) its payment window
--- from the requested payment.
+-- from the requested payment, or if it's already performing a snapshot.
 --
 -- NOTE: There's a slight _abuse_ here. Transactions are indeed written from the PoV
 -- of the _sender_. So the amount corresponds to how much did the sender "lost" in the
@@ -456,24 +473,28 @@ matchBlocked
   => Maybe Ada
   -> (ClientId, MockTx, [ClientId])
   -> ClientId
-  -> (st, Balance, mailbox, pending)
-  -> f (Maybe ClientId)
+  -> (ClientState, Balance, mailbox, pending)
+  -> f (Maybe (ClientId, Maybe Msg))
 matchBlocked Nothing _ _ _ =
   pure Nothing
-matchBlocked (Just paymentWindow) (sender, tx, recipients) clientId (_, balance, _, _)
+matchBlocked (Just paymentWindow) (sender, tx, recipients) clientId (st, balance, _, _)
   | clientId `elem` recipients =
-      case viewPaymentWindow (lovelace paymentWindow) balance (received tx recipients) of
-        InPaymentWindow ->
+      case (st, viewPaymentWindow (lovelace paymentWindow) balance (received tx recipients)) of
+        (Blocked, _) ->
+          pure (Just (clientId, Nothing))
+        (_, OutOfPaymentWindow) ->
+          pure (Just (clientId, Just NeedSnapshot))
+        (_, InPaymentWindow) ->
           pure Nothing
-        OutOfPaymentWindow ->
-          pure (Just clientId)
 
   | clientId == sender =
-      case viewPaymentWindow (lovelace paymentWindow) balance (negate $ sent tx) of
-        InPaymentWindow ->
+      case (st, viewPaymentWindow (lovelace paymentWindow) balance (negate $ sent tx)) of
+        (Blocked, _) ->
+          pure (Just (clientId, Nothing))
+        (_, OutOfPaymentWindow) ->
+          pure (Just (clientId, Just NeedSnapshot))
+        (_, InPaymentWindow) ->
           pure Nothing
-        OutOfPaymentWindow ->
-          pure (Just clientId)
 
   | otherwise =
       pure Nothing
@@ -500,7 +521,7 @@ instance Exception UnknownClient
 
 type ClientId = NodeId
 
-data ClientState = Online | Offline
+data ClientState = Online | Offline | Blocked
   deriving (Generic, Show, Eq)
 
 data Client m = Client
