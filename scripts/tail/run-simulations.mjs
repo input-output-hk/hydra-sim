@@ -33,6 +33,8 @@ const matrix =
   , { "window": 10000, "delay": 240, numberOfClients: 1000,  compression: 20000 }
   , { "window": 10000, "delay": 270, numberOfClients: 1000,  compression: 20000 }
   , { "window": 10000, "delay": 300, numberOfClients: 1000,  compression: 20000 }
+  , { "window": 10000, "delay": 450, numberOfClients: 1000,  compression: 20000 }
+  , { "window": 10000, "delay": 600, numberOfClients: 1000,  compression: 20000 }
 
   // Payment Window
   , { "window":   1000, "delay": 120, numberOfClients: 1000,  compression: 20000 }
