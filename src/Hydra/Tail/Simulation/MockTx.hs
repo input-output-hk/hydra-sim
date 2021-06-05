@@ -8,12 +8,6 @@ module Hydra.Tail.Simulation.MockTx
 
 import Prelude
 
-import Crypto.Hash.MD5
-    ( hash )
-import Data.ByteString.Base16
-    ( encodeBase16 )
-import Data.Function
-    ( (&) )
 import Data.Text
     ( Text )
 import Data.Time.Clock
@@ -25,7 +19,7 @@ import Hydra.Tail.Simulation.SlotNo
 import HydraSim.DelayedComp
     ( delayedComp )
 import HydraSim.Sized
-    ( Size, Sized (..) )
+    ( Size (..), Sized (..) )
 import HydraSim.Tx.Class
     ( Tx (..) )
 import HydraSim.Types
@@ -33,21 +27,21 @@ import HydraSim.Types
 
 import qualified Data.Set as Set
 import qualified Data.Text as T
-import qualified Data.Text.Encoding as T
 
 data MockTx = MockTx
   { txId :: TxRef MockTx
   , txSize :: Size
   , txAmount :: Lovelace
+  , txRecipients :: [NodeId]
   } deriving (Eq, Ord, Show)
 
 sent :: MockTx -> Lovelace
 sent =
   txAmount
 
-received :: MockTx -> [NodeId] -> Lovelace
-received tx recipients = Lovelace $
-  unLovelace (txAmount tx) `div` toInteger (length recipients)
+received :: MockTx -> Lovelace
+received MockTx{txAmount,txRecipients} = Lovelace $
+  unLovelace txAmount `div` toInteger (length txRecipients)
 
 instance Tx MockTx where
   newtype TxRef MockTx = TxRef Text
@@ -81,15 +75,10 @@ mockTx
   -> SlotNo
   -> Lovelace
   -> Size
+  -> [NodeId]
   -> MockTx
-mockTx clientId slotNo txAmount txSize = MockTx
-  { txId =
-      -- NOTE: Arguably, we could want to keep this unobfuscasted
-      -- for debugging purpose. Though putting these elements in
-      -- the transaction 'body' might make more sense?
-      (show clientId <> show slotNo <> show txAmount)
-      & encodeBase16 . hash . T.encodeUtf8 . T.pack
-      & TxRef
-  , txAmount
-  , txSize
-  }
+mockTx (NodeId i) (SlotNo sl) txAmount@(Lovelace am) txSize@(Size sz) txRecipients =
+  MockTx { txId, txAmount , txSize, txRecipients }
+ where
+  txId = TxRef $ T.pack
+    (show i <> show sl <> show am <> show sz <> show (getNodeId <$> txRecipients))

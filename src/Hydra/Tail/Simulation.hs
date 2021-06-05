@@ -9,7 +9,7 @@ import Prelude
 import Control.Exception
     ( Exception )
 import Control.Monad
-    ( forM, forM_, forever, join, liftM4, void, when )
+    ( forM, forM_, forever, join, liftM5, void, when )
 import Control.Monad.Class.MonadAsync
     ( MonadAsync
     , async
@@ -151,7 +151,7 @@ runSimulation opts@RunOptions{slotLength,serverOptions} events = runSimTrace $ d
   -- consider that the server would reject any transaction larger than `W`, so we
   -- filter them out of the simulation if any.
   trim = filter $ \case
-    Event _ _ (NewTx tx _) ->
+    Event _ _ (NewTx tx) ->
       maybe True (\w -> sent tx <= lovelace w) (opts ^. #paymentWindow)
     _ -> True
 
@@ -258,7 +258,7 @@ data Msg
   --
   -- ↓↓↓ Client messages ↓↓↓
   --
-  = NewTx !MockTx ![ClientId]
+  = NewTx !MockTx
   -- ^ A new transaction, sent to some peer. The current behavior of this simulation
   -- consider that each client is only sending to one single peer. Later, we probably
   -- want to challenge this assumption by analyzing real transaction patterns from the
@@ -294,8 +294,8 @@ data Msg
 
 instance Sized Msg where
   size = \case
-    NewTx tx clients ->
-      sizeOfHeader + size tx + sizeOfAddress * fromIntegral (length clients)
+    NewTx tx ->
+      sizeOfHeader + size tx + sizeOfAddress * fromIntegral (length $ txRecipients tx)
     Pull ->
       sizeOfHeader
     Connect{} ->
@@ -378,7 +378,7 @@ runServer tracer options Server{multiplexer, registry} = do
   serverMain :: m ()
   serverMain = do
     atomically (getMessage multiplexer) >>= \case
-      (clientId, NewTx tx recipients) -> do
+      (clientId, NewTx tx) -> do
         void $ runComp (txValidate Set.empty tx)
         void $ runComp lookupClient
 
@@ -387,7 +387,7 @@ runServer tracer options Server{multiplexer, registry} = do
         -- until they are done.
         blocked <- withTMVar registry $ \clients -> (,clients)
             <$> Map.traverseMaybeWithKey
-                  (matchBlocked (options ^. #paymentWindow) (clientId, tx, recipients))
+                  (matchBlocked (options ^. #paymentWindow) (clientId, tx))
                   clients
         if not (null blocked) then do
           withTMVar_ registry $ execStateT $ do
@@ -395,22 +395,22 @@ runServer tracer options Server{multiplexer, registry} = do
               (ix, (client, Just NeedSnapshot)) -> do
                 lift $ sendTo multiplexer client NeedSnapshot
                 modifyM $ updateF client $ \(_st, balance, mailbox, pending) -> do
-                  let pending' = if ix == (0 :: Int) then NewTx tx recipients:pending else pending
+                  let pending' = if ix == (0 :: Int) then NewTx tx:pending else pending
                   pure $ Just (Blocked, balance, mailbox, pending')
               _ -> do
                 pure () -- Already blocked, and snapshot already requested.
 
         else do
           withTMVar_ registry $ execStateT $ do
-            forM_ recipients $ \recipient -> do
+            forM_ (txRecipients tx) $ \recipient -> do
               modifyM $ updateF recipient $ \case
                 (Online, balance, mailbox, pending) -> do
                   sendTo multiplexer recipient (NotifyTx tx)
-                  pure $ Just (Online, modifyCurrent (+ received tx recipients) balance , mailbox, pending)
+                  pure $ Just (Online, modifyCurrent (+ received tx) balance , mailbox, pending)
                 (st, balance, mailbox, pending) -> do
                   let msg = NotifyTx tx
                   traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
-                  pure $ Just (st, modifyCurrent (+ received tx recipients) balance, msg:mailbox, pending)
+                  pure $ Just (st, modifyCurrent (+ received tx) balance, msg:mailbox, pending)
 
             modifyM $ updateF clientId $ \(st, balance, mailbox, pending) ->
               pure $ Just (st, modifyCurrent (\x -> x - sent tx) balance, mailbox, pending)
@@ -471,15 +471,15 @@ lookupClient =
 matchBlocked
   :: Applicative f
   => Maybe Ada
-  -> (ClientId, MockTx, [ClientId])
+  -> (ClientId, MockTx)
   -> ClientId
   -> (ClientState, Balance, mailbox, pending)
   -> f (Maybe (ClientId, Maybe Msg))
 matchBlocked Nothing _ _ _ =
   pure Nothing
-matchBlocked (Just paymentWindow) (sender, tx, recipients) clientId (st, balance, _, _)
-  | clientId `elem` recipients =
-      case (st, viewPaymentWindow (lovelace paymentWindow) balance (received tx recipients)) of
+matchBlocked (Just paymentWindow) (sender, tx) clientId (st, balance, _, _)
+  | clientId `elem` txRecipients tx =
+      case (st, viewPaymentWindow (lovelace paymentWindow) balance (received tx)) of
         (Blocked, _) ->
           pure (Just (clientId, Nothing))
         (_, OutOfPaymentWindow) ->
@@ -649,7 +649,7 @@ stepClient options currentSlot identifier = do
           , Pull
           )
         , ( submit
-          , NewTx (mockTx identifier currentSlot (lovelace amount) txSize) [recipient]
+          , NewTx (mockTx identifier currentSlot (lovelace amount) txSize [recipient])
           )
         ]
     , predicate
@@ -705,7 +705,7 @@ summarizeEvents RunOptions{paymentWindow} events = SimulationSummary
    where
     w = maybe 1e99 (asDouble . lovelace) paymentWindow
     count (!volume, st) = \case
-      (Event _ _ (NewTx MockTx{txAmount} _)) ->
+      (Event _ _ (NewTx MockTx{txAmount})) ->
         ( volume + if asDouble txAmount <= w then txAmount else 0
         , st
           { total =
@@ -762,7 +762,7 @@ eventToCsv = \case
       ]
 
   -- slot,clientId,new-tx,size,amount,recipients
-  Event (SlotNo sl) (NodeId cl) (NewTx (MockTx _ (Size sz) (Lovelace am)) rs) ->
+  Event (SlotNo sl) (NodeId cl) (NewTx (MockTx _ (Size sz) (Lovelace am) rs)) ->
     T.intercalate ","
       [ T.pack (show sl)
       , T.pack (show cl)
@@ -788,12 +788,13 @@ eventFromCsv line =
     [ sl, cl, "new-tx", sz, am, rs ] -> Event
         <$> readSlotNo sl
         <*> readClientId cl
-        <*> (NewTx
-          <$> liftM4 mockTx (readClientId cl) (readSlotNo sl) (readAmount am) (readSize sz)
-          <*> readRecipients rs
-        )
-
-
+        <*> (NewTx <$> liftM5 mockTx
+              (readClientId cl)
+              (readSlotNo sl)
+              (readAmount am)
+              (readSize sz)
+              (readRecipients rs)
+            )
     _ ->
       Nothing
  where

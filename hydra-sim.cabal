@@ -96,11 +96,9 @@ library
     Hydra.Tail.Simulation.SlotNo
     Hydra.Tail.Simulation.PaymentWindow
   build-depends:       base
-                     , base16
                      , ansi-terminal
                      , containers
                      , contra-tracer
-                     , cryptohash-md5
                      , generic-lens
                      , io-sim
                      , io-sim-classes
