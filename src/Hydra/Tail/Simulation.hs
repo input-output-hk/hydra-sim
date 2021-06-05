@@ -44,7 +44,7 @@ import Data.Generics.Labels
 import Data.List
     ( foldl', maximumBy )
 import Data.Map.Strict
-    ( Map, (!) )
+    ( Map )
 import Data.Ratio
     ( (%) )
 import Data.Text
@@ -170,20 +170,10 @@ data Analyze = Analyze
   , actualThroughput :: Double
     -- ^ Actual Throughput measured from confirmed transactions.
     -- Said differently, the ratio of transactions compared to the number of snapshots.
-  , averageSnapshotPerClient :: Double
-    -- ^ Average numer of snapshots per client over the simulation.
-  , actualWriteNetworkUsage :: NetworkCapacity
-    -- ^ Actual write network usage used / needed for running the simulation.
-  , actualReadNetworkUsage :: NetworkCapacity
-    -- ^ Actual read network usage used / needed for running the simulation.
+  , averageConfirmationTime :: Double
+    -- ^ Average time for a transaction to get 'confirmed'. This includes snapshotting when
+    -- relevant.
   } deriving (Generic, Show)
-
-data Metric
-  = ConfirmedTxs
-  | Snapshots
-  | WriteUsage
-  | ReadUsage
-  deriving (Generic, Eq, Ord, Enum, Bounded)
 
 analyzeSimulation
   :: forall m. Monad m
@@ -193,24 +183,20 @@ analyzeSimulation
   -> [Event]
   -> Trace ()
   -> m Analyze
-analyzeSimulation notify RunOptions{slotLength} SimulationSummary{numberOfClients,numberOfTransactions} events trace = do
-  (metrics, _) <-
-    let zero :: Map Metric Integer
-        zero = Map.fromList [ (k, 0) | k <- [minBound .. maxBound] ]
-
-        fn :: (ThreadLabel, Time, TraceTailSimulation) -> (Map Metric Integer, SlotNo) -> m (Map Metric Integer, SlotNo)
+analyzeSimulation notify RunOptions{slotLength} SimulationSummary{numberOfTransactions} events trace = do
+  (confirmations, _) <-
+    let fn :: (ThreadLabel, Time, TraceTailSimulation)
+           -> (Map (TxRef MockTx) [DiffTime], SlotNo)
+           -> m (Map (TxRef MockTx) [DiffTime], SlotNo)
         fn = \case
-          (_threadLabel, _time, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId AckTx{}))) ->
-            (\(!m, !sl) -> pure (Map.adjust (+ 1) ConfirmedTxs m, sl))
+          (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId (AckTx ref)))) ->
+            (\(!m, !sl) -> pure
+              ( Map.update (\ts -> Just (t : ts)) ref m
+              , sl
+              ))
 
-          (_threadLabel, _time, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId NeedSnapshot{}))) ->
-            (\(!m, !sl) -> pure (Map.adjust (+ 1) Snapshots m, sl))
-
-          (_threadLabel, _time, TraceServer (TraceServerMultiplexer (MPRecvLeading _nodeId (Size s)))) ->
-            (\(!m, !sl) -> pure (Map.adjust (+ toInteger s) ReadUsage m, sl))
-
-          (_threadLabel, _time, TraceServer (TraceServerMultiplexer (MPSendLeading _nodeId (Size s)))) ->
-            (\(!m, !sl) -> pure (Map.adjust (+ toInteger s) WriteUsage m, sl))
+          (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId (NewTx tx)))) ->
+            (\(!m, !sl) -> pure (Map.insert (txRef tx) [t] m, sl))
 
           (_threadLabel, _time, TraceClient (TraceClientWakeUp sl')) ->
             (\(!m, !sl) ->
@@ -222,13 +208,18 @@ analyzeSimulation notify RunOptions{slotLength} SimulationSummary{numberOfClient
           _ ->
             pure
 
-     in foldTraceEvents fn (zero, -1) trace
+     in foldTraceEvents fn (mempty, -1) trace
+
+  let confirmedTxs =
+        Map.elems $ Map.filter ((== 2) . length) confirmations
+
+  let totalConfirmationTime =
+        diffTimeToSeconds $ foldl' (\total -> \case
+          [end, start] -> total + (end - start)
+          _ -> total) 0 confirmedTxs
 
   let numberOfConfirmedTransactions =
-        fromIntegral (metrics ! ConfirmedTxs)
-
-  let numberOfSnapshots =
-        fromIntegral (metrics ! Snapshots)
+        fromIntegral (length confirmedTxs)
 
   let duration =
         diffTimeToSeconds (durationOf events slotLength)
@@ -238,12 +229,8 @@ analyzeSimulation notify RunOptions{slotLength} SimulationSummary{numberOfClient
         fromIntegral (numberOfTransactions ^. #belowPaymentWindow) / duration
     , actualThroughput =
         numberOfConfirmedTransactions / duration
-    , averageSnapshotPerClient =
-        numberOfSnapshots / fromIntegral numberOfClients
-    , actualWriteNetworkUsage =
-        kbitsPerSecond $ (metrics ! WriteUsage) `div` (1024 * round duration)
-    , actualReadNetworkUsage =
-        kbitsPerSecond $ (metrics ! ReadUsage) `div` (1024 * round duration)
+    , averageConfirmationTime =
+        1000 * totalConfirmationTime / numberOfConfirmedTransactions
     }
 
 --
