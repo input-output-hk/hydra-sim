@@ -103,6 +103,7 @@ library
                      , io-sim
                      , io-sim-classes
                      , optparse-applicative
+                     , pretty-simple
                      , quiet
                      , random
                      , safe
