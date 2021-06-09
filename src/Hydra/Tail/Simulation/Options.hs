@@ -36,6 +36,8 @@ import System.Console.ANSI
     ( hClearLine, setCursorColumn )
 import System.IO
     ( BufferMode (..), hSetBuffering, hSetEncoding, stdout, utf8 )
+import Text.Pretty.Simple
+    ( pPrint )
 
 import Hydra.Tail.Simulation.PaymentWindow
     ( Ada (..) )
@@ -293,19 +295,21 @@ networkCapacityOption readOrWrite defaultValue =
   readOrWriteS = prettyReadOrWrite readOrWrite
 
 withProgressReport
-  :: SlotNo
+  :: Show analyze
+  => SlotNo
   -> RunOptions
-  -> ((SlotNo -> IO ()) -> IO a)
+  -> ((SlotNo -> Maybe analyze -> IO ()) -> IO a)
   -> IO a
 withProgressReport lastSlot options io = do
   hSetBuffering stdout NoBuffering
   hSetEncoding stdout utf8
   a <- case verbosity options of
-    Verbose -> io $ \(SlotNo sl) -> do
+    Verbose -> io $ \(SlotNo sl) mAnalyze -> do
       setCursorColumn 0
-      putStr $ spinner sl <> " SlotNo " <> show sl <> "/" <> show (unSlotNo lastSlot)
+      maybe (pure ()) pPrint mAnalyze
+      putStr $ spinner sl <> " Slot  " <> show sl <> "/" <> show (unSlotNo lastSlot)
     Quiet ->
-      io $ \_sl -> pure ()
+      io $ \_sl _analyze -> pure ()
   when (verbosity options == Verbose) (hClearLine stdout >> setCursorColumn 0)
   return a
  where
