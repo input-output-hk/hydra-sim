@@ -2,31 +2,15 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'child_process';
 
-const CONCURRENCY = 3;
+const CONCURRENCY = 16;
 const __dirname = path.resolve();
 
 const matrix =
-  // Compression / Density
-  [ { "window": 100, "delay": 120, numberOfClients: 5000,  compression:  1000 }
-  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression:  2500 }
-  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression:  5000 }
-  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression: 10000 }
-  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression: 11000 }
-  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression: 12000 }
-  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression: 13000 }
-  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression: 14000 }
-  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression: 15000 }
-  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression: 16000 }
-  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression: 17000 }
-  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression: 18000 }
-  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression: 19000 }
-  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression: 20000 }
-
   // Settlement Delay
-  , { "window": 100, "delay":  30, numberOfClients: 5000,  compression: 20000 }
+  [ { "window": 100, "delay":  30, numberOfClients: 5000,  compression: 20000 }
   , { "window": 100, "delay":  60, numberOfClients: 5000,  compression: 20000 }
   , { "window": 100, "delay":  90, numberOfClients: 5000,  compression: 20000 }
-  // , { "window":  100, "delay": 120, numberOfClients: 5000,  compression: 20000 }
+  , { "window": 100, "delay": 120, numberOfClients: 5000,  compression: 20000 }
   , { "window": 100, "delay": 150, numberOfClients: 5000,  compression: 20000 }
   , { "window": 100, "delay": 180, numberOfClients: 5000,  compression: 20000 }
   , { "window": 100, "delay": 210, numberOfClients: 5000,  compression: 20000 }
