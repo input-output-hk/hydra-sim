@@ -46,6 +46,8 @@ mkShell rec {
     cabal-plan
     # needed for HLS to work properly, see https://github.com/haskell/haskell-language-server/issues/176
     hspec-discover
+    # For scripts/
+    nodejs-14_x
     # For discovering libs (below)
     pkgconfig
   ];
