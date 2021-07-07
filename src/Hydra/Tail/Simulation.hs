@@ -255,9 +255,12 @@ writeTransactions filepath transactions = do
  where
   toCsv :: (TxRef MockTx, [DiffTime]) -> Maybe Text
   toCsv (TxRef ref, [end, start]) =
-    Just $ ref <> "," <> tshow (diffTimeToSeconds (end - start))
+    Just $ replaceCommas ref <> "," <> tshow (diffTimeToSeconds (end - start))
   toCsv _ =
     Nothing
+
+  replaceCommas :: Text -> Text
+  replaceCommas = T.map (\c -> if c == ',' then ';' else c)
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show
