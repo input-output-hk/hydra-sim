@@ -65,7 +65,7 @@ import qualified Data.Text as T
 import qualified Data.Text.IO as TIO
 
 import Hydra.Tail.Simulation.MockTx
-    ( MockTx (..), mockTx, received, sent )
+    ( MockTx (..), mockTx, received, sent, TxRef(..))
 import Hydra.Tail.Simulation.Options
     ( ClientOptions (..)
     , NetworkCapacity (..)
@@ -120,6 +120,7 @@ import HydraSim.Types
     ( NodeId (..) )
 
 import qualified HydraSim.Multiplexer as Multiplexer
+import Data.Maybe (mapMaybe)
 
 --
 -- Simulation
@@ -177,6 +178,8 @@ data Analyze = Analyze
     -- relevant.
   } deriving (Generic, Show)
 
+type Transactions = Map (TxRef MockTx) [DiffTime]
+
 analyzeSimulation
   :: forall m. Monad m
   => (SlotNo -> Maybe Analyze -> m ())
@@ -184,8 +187,8 @@ analyzeSimulation
   -> SimulationSummary
   -> [Event]
   -> Trace ()
-  -> m Analyze
-analyzeSimulation notify RunOptions{slotLength} summary events trace = do
+  -> m Transactions
+analyzeSimulation notify RunOptions{slotLength} summary _events trace = do
   (confirmations, _) <-
     let fn :: (ThreadLabel, Time, TraceTailSimulation)
            -> (Map (TxRef MockTx) [DiffTime], SlotNo)
@@ -215,20 +218,16 @@ analyzeSimulation notify RunOptions{slotLength} summary events trace = do
             pure
 
      in foldTraceEvents fn (mempty, -1) trace
-
-  let duration =
-        durationOf events slotLength
-
-  pure $ mkAnalyze duration summary confirmations
+  pure confirmations
 
 mkAnalyze
   :: DiffTime
   -> SimulationSummary
-  -> Map (TxRef MockTx) [DiffTime]
+  -> Transactions
   -> Analyze
-mkAnalyze duration SimulationSummary{numberOfTransactions} confirmations =
+mkAnalyze duration SimulationSummary{numberOfTransactions} txs =
   let confirmedTxs =
-        Map.elems $ Map.filter ((== 2) . length) confirmations
+        Map.elems $ Map.filter ((== 2) . length) txs
 
       totalConfirmationTime =
         diffTimeToSeconds $ foldl' (\total -> \case
@@ -248,6 +247,20 @@ mkAnalyze duration SimulationSummary{numberOfTransactions} confirmations =
         totalConfirmationTime / fromIntegral numberOfConfirmedTransactions
     }
 
+writeTransactions :: FilePath -> Transactions -> IO ()
+writeTransactions filepath transactions = do
+  TIO.writeFile filepath $ T.unlines $
+    "txId,confirmationTime"
+    : mapMaybe toCsv (Map.toList transactions)
+ where
+  toCsv :: (TxRef MockTx, [DiffTime]) -> Maybe Text
+  toCsv (TxRef ref, [end, start]) =
+    Just $ ref <> "," <> tshow (diffTimeToSeconds (end - start))
+  toCsv _ =
+    Nothing
+
+tshow :: Show a => a -> Text
+tshow = T.pack . show
 
 --
 -- (Simplified) Tail-Protocol

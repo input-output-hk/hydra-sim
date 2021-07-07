@@ -4,6 +4,7 @@ module Hydra.Tail.Simulation.MockTx
   , received
   , validationTime
   , mockTx
+  , TxRef(..)
   ) where
 
 import Prelude

@@ -9,10 +9,10 @@ import Hydra.Tail.Simulation
     , readEventsThrow
     , runSimulation
     , summarizeEvents
-    , writeEvents
+    , writeEvents, writeTransactions, mkAnalyze, durationOf
     )
 import Hydra.Tail.Simulation.Options
-    ( Command (..), parseCommand, withProgressReport )
+    ( Command (..), parseCommand, withProgressReport, slotLength )
 import Text.Pretty.Simple
     ( pPrint )
 
@@ -30,6 +30,11 @@ main = do
       let summary = summarizeEvents options events
       pPrint summary
       let trace = runSimulation options events
-      analyze <- withProgressReport (lastSlot summary) options $ \reportProgress ->
+      txs <- withProgressReport (lastSlot summary) options $ \reportProgress ->
         analyzeSimulation reportProgress options summary events trace
-      pPrint analyze
+      -- REVIEW(SN): in tail we did optionally "discardEdges"
+      let duration = durationOf events (slotLength options)
+      pPrint $ mkAnalyze duration summary txs
+      putStrLn "Calculating confirmation times..."
+      writeTransactions "confirmedTransactions.csv" txs
+      putStrLn "confirmedTransactions.csv"
