@@ -55,6 +55,8 @@ mkShell rec {
   libs = [
     libsodium-vrf
     zlib
+    # Used by charting library in scripts/
+    libuuid
   ];
 
   buildInputs = tools ++ libs;
