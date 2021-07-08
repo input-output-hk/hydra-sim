@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE TypeApplications #-}
 
+{-# OPTIONS_GHC -Wno-name-shadowing #-}
 module Hydra.Tail.Simulation where
 
 import Prelude
@@ -428,15 +429,20 @@ runServer tracer options Server{multiplexer, registry} = do
                 traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
                 pure $ Just (st, modifyCurrent (+ received tx) balance, msg:mailbox, pending)
 
-          modifyM $ updateF clientId $ \(st, balance, mailbox, pending) ->
-            pure $ Just (st, modifyCurrent (\x -> x - sent tx) balance, mailbox, pending)
+          lift $ sendTo multiplexer clientId (AckTx $ txRef tx)
 
-        sendTo multiplexer clientId (AckTx $ txRef tx)
-
-      -- TODO(SN): Check whether we should send 'NeedSnapshot' for pro-active
-      -- snapshotting (after the tx). Logically this would be done on the
-      -- client-side but we have the payment window 'registry' only on the
-      -- server for now.
+          modifyM $ updateF clientId $ \(st, balance, mailbox, pending) -> do
+            let newBalance = modifyCurrent (\x -> x - sent tx) balance
+            -- Check whether we should send 'NeedSnapshot' for pro-active
+            -- snapshotting (after the tx). Logically this would be done on the
+            -- client-side but we have the payment window 'registry' only on the
+            -- server for now.
+            if inProactiveSnapshotLimit options newBalance
+            then do
+              sendTo multiplexer clientId NeedSnapshot
+              pure $ Just (Blocked, newBalance, mailbox, pending)
+            else
+              pure $ Just (st, newBalance, mailbox, pending)
 
     (clientId, Pull) -> do
       runComp lookupClient
@@ -519,6 +525,22 @@ matchBlocked (Just paymentWindow) (sender, tx) clientId (st, balance, _, _)
   | otherwise =
       pure Nothing
 
+inProactiveSnapshotLimit :: RunOptions -> Balance -> Bool
+inProactiveSnapshotLimit RunOptions{paymentWindow, proactiveSnapshot} Balance{initial, current} =
+  case (paymentWindow, proactiveSnapshot) of
+    (Just w, Just frac) -> absBalance > limit w frac
+    _ -> False
+ where
+  absBalance = abs $ current - initial
+
+  limit w frac = fromDouble (toDouble (lovelace w) * frac)
+
+  toDouble :: Lovelace -> Double
+  toDouble = fromInteger . unLovelace
+
+  fromDouble :: Double -> Lovelace
+  fromDouble = Lovelace . truncate
+
 data TraceServer
   = TraceServerMultiplexer (TraceMultiplexer Msg)
   | TraceServerStoreInMailbox ClientId Msg Int
@@ -531,7 +553,7 @@ data UnexpectedServerMsg = UnexpectedServerMsg NodeId Msg
   deriving Show
 instance Exception UnexpectedServerMsg
 
-data UnknownClient = UnknownClient NodeId
+newtype UnknownClient = UnknownClient NodeId
   deriving Show
 instance Exception UnknownClient
 
@@ -759,7 +781,7 @@ getNumberOfClients :: [Event] -> Integer
 getNumberOfClients =
   toInteger . getNodeId . from . maximumBy (\a b -> getNodeId (from a) `compare` getNodeId (from b))
 
-data CouldntParseCsv = CouldntParseCsv FilePath
+newtype CouldntParseCsv = CouldntParseCsv FilePath
   deriving Show
 instance Exception CouldntParseCsv
 

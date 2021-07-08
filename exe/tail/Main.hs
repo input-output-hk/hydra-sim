@@ -2,6 +2,7 @@ module Main where
 
 import Prelude
 
+import Data.Maybe (isJust)
 import Hydra.Tail.Simulation (
   SimulationSummary (..),
   analyzeSimulation,
@@ -17,6 +18,7 @@ import Hydra.Tail.Simulation (
 import Hydra.Tail.Simulation.Options (
   Command (..),
   parseCommand,
+  proactiveSnapshot,
   settlementDelay,
   withProgressReport,
  )
@@ -50,7 +52,9 @@ main = do
               <> show (unSlotNo $ lastSlot summary)
               <> "slots-"
               <> show (unSlotNo $ settlementDelay options)
-              <> "s.csv"
+              <> "s"
+              <> (if isJust $ proactiveSnapshot options then "-proactive" else "")
+              <> ".csv"
 
       putStrLn $ "Writing confirmation times into: " <> resultName
       writeTransactions resultName txs
