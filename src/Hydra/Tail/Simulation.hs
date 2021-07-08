@@ -33,8 +33,6 @@ import Control.Monad.Trans.State.Strict
     ( StateT, evalStateT, execStateT, state )
 import Control.Tracer
     ( Tracer (..), contramap, traceWith )
-import Data.Foldable
-    ( traverse_ )
 import Data.Functor
     ( ($>) )
 import Data.Generics.Internal.VL.Lens
@@ -106,7 +104,6 @@ import HydraSim.Multiplexer
     ( Multiplexer
     , getMessage
     , newMultiplexer
-    , reenqueue
     , sendTo
     , startMultiplexer
     )
@@ -392,88 +389,86 @@ runServer tracer options Server{multiplexer, registry} = do
       (withLabel "Main: Server" serverMain)
     )
  where
-  reenqueue' = reenqueue (contramap TraceServerMultiplexer tracer)
+  serverMain = forever $
+    atomically (getMessage multiplexer) >>= handleMessage
 
-  serverMain :: m ()
-  serverMain = do
-    atomically (getMessage multiplexer) >>= \case
-      (clientId, NewTx tx) -> do
-        void $ runComp (txValidate Set.empty tx)
-        void $ runComp lookupClient
+  handleMessage = \case
+    (clientId, NewTx tx) -> do
+      void $ runComp (txValidate Set.empty tx)
+      void $ runComp lookupClient
 
-        -- Some of the recipients or the sender may be out of their payment window
-        -- (i.e. 'Blocked'), if that's the case, we cannot process the transaction
-        -- until they are done.
-        blocked <- withTMVar registry $ \clients -> (,clients)
-            <$> Map.traverseMaybeWithKey
-                  (matchBlocked (options ^. #paymentWindow) (clientId, tx))
-                  clients
-        if not (null blocked) then do
-          withTMVar_ registry $ execStateT $ do
-            forM_ (zip [0..] (Map.elems blocked)) $ \case
-              (ix, (client, Just NeedSnapshot)) -> do
-                lift $ sendTo multiplexer client NeedSnapshot
-                modifyM $ updateF client $ \(_st, balance, mailbox, pending) -> do
-                  let pending' = if ix == (0 :: Int) then NewTx tx:pending else pending
-                  pure $ Just (Blocked, balance, mailbox, pending')
-              _ -> do
-                pure () -- Already blocked, and snapshot already requested.
+      -- Some of the recipients or the sender may be out of their payment window
+      -- (i.e. 'Blocked'), if that's the case, we cannot process the transaction
+      -- until they are done.
+      blocked <- withTMVar registry $ \clients ->
+        (,clients) <$> Map.traverseMaybeWithKey
+                (matchBlocked (options ^. #paymentWindow) (clientId, tx))
+                clients
+      if not (null blocked) then do
+        withTMVar_ registry $ execStateT $ do
+          forM_ (zip [0..] (Map.elems blocked)) $ \case
+            (ix, (client, Just NeedSnapshot)) -> do
+              lift $ sendTo multiplexer client NeedSnapshot
+              modifyM $ updateF client $ \(_st, balance, mailbox, pending) -> do
+                -- NOTE(SN): This seems to be only re-enqueuing it for the sending client!?
+                let pending' = if ix == (0 :: Int) then NewTx tx:pending else pending
+                pure $ Just (Blocked, balance, mailbox, pending')
+            _ -> do
+              pure () -- Already blocked, and snapshot already requested.
 
-        else do
-          withTMVar_ registry $ execStateT $ do
-            forM_ (txRecipients tx) $ \recipient -> do
-              modifyM $ updateF recipient $ \case
-                (Online, balance, mailbox, pending) -> do
-                  sendTo multiplexer recipient (NotifyTx tx)
-                  pure $ Just (Online, modifyCurrent (+ received tx) balance , mailbox, pending)
-                (st, balance, mailbox, pending) -> do
-                  let msg = NotifyTx tx
-                  traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
-                  pure $ Just (st, modifyCurrent (+ received tx) balance, msg:mailbox, pending)
+      else do
+        withTMVar_ registry $ execStateT $ do
+          forM_ (txRecipients tx) $ \recipient -> do
+            modifyM $ updateF recipient $ \case
+              (Online, balance, mailbox, pending) -> do
+                sendTo multiplexer recipient (NotifyTx tx)
+                pure $ Just (Online, modifyCurrent (+ received tx) balance , mailbox, pending)
+              (st, balance, mailbox, pending) -> do
+                let msg = NotifyTx tx
+                traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
+                pure $ Just (st, modifyCurrent (+ received tx) balance, msg:mailbox, pending)
 
-            modifyM $ updateF clientId $ \(st, balance, mailbox, pending) ->
-              pure $ Just (st, modifyCurrent (\x -> x - sent tx) balance, mailbox, pending)
+          modifyM $ updateF clientId $ \(st, balance, mailbox, pending) ->
+            pure $ Just (st, modifyCurrent (\x -> x - sent tx) balance, mailbox, pending)
 
-          sendTo multiplexer clientId (AckTx $ txRef tx)
+        sendTo multiplexer clientId (AckTx $ txRef tx)
 
-        -- TODO(SN): Check whether we should send 'NeedSnapshot' for pro-active
-        -- snapshotting (after the tx). Logically this would be done on the
-        -- client-side but we have the payment window 'registry' only on the
-        -- server for now.
+      -- TODO(SN): Check whether we should send 'NeedSnapshot' for pro-active
+      -- snapshotting (after the tx). Logically this would be done on the
+      -- client-side but we have the payment window 'registry' only on the
+      -- server for now.
 
-        serverMain
+    (clientId, Pull) -> do
+      runComp lookupClient
+      withTMVar_ registry $ \clients -> do
+        updateF clientId (\case
+          (st, balance, mailbox, pending) -> do
+            mapM_ (sendTo multiplexer clientId) (reverse mailbox)
+            pure $ Just (st, balance, [], pending)
+          ) clients
 
-      (clientId, Pull) -> do
-        runComp lookupClient
-        withTMVar_ registry $ \clients -> do
-          updateF clientId (\case
-            (st, balance, mailbox, pending) -> do
-              mapM_ (sendTo multiplexer clientId) (reverse mailbox)
-              pure $ Just (st, balance, [], pending)
-            ) clients
-        serverMain
+    (clientId, Connect) -> do
+      runComp lookupClient
+      withTMVar_ registry $ \clients -> do
+        return $ Map.update (\(_, balance, mailbox, pending) -> Just (Online, balance, mailbox, pending)) clientId clients
 
-      (clientId, Connect) -> do
-        runComp lookupClient
-        withTMVar_ registry $ \clients -> do
-          return $ Map.update (\(_, balance, mailbox, pending) -> Just (Online, balance, mailbox, pending)) clientId clients
-        serverMain
+    (clientId, Disconnect) -> do
+      runComp lookupClient
+      withTMVar_ registry $ \clients -> do
+        return $ Map.update (\(_, balance, mailbox, pending) -> Just (Offline, balance, mailbox, pending)) clientId clients
 
-      (clientId, Disconnect) -> do
-        runComp lookupClient
-        withTMVar_ registry $ \clients -> do
-          return $ Map.update (\(_, balance, mailbox, pending) -> Just (Offline, balance, mailbox, pending)) clientId clients
-        serverMain
+    (clientId, SnapshotDone) -> do
+      runComp lookupClient
+      pending <- withTMVar registry $ \clients -> do
+        case Map.lookup clientId clients of
+          Nothing -> pure ([], clients)
+          Just (_st, Balance{current}, mailbox, pending) -> do
+            let clients' = Map.insert clientId (Offline, initialBalance current, mailbox, []) clients
+            pure (pending, clients')
+      mapM_ handleMessage (reverse $ (clientId,) <$> pending)
 
-      (clientId, SnapshotDone) -> do
-        runComp lookupClient
-        withTMVar_ registry $ updateF clientId $ \(_st, Balance{current}, mailbox, pending) -> do
-          traverse_ (reenqueue' multiplexer) (reverse $ (clientId,) <$> pending)
-          return $ Just (Offline, initialBalance current, mailbox, [])
-        serverMain
-
-      (clientId, msg) ->
-        throwIO (UnexpectedServerMsg clientId msg)
+    (clientId, msg) ->
+      throwIO (UnexpectedServerMsg clientId msg)
 
 -- | A computation simulating the time needed to lookup a client in an in-memory registry.
 -- The value is taken from running benchmarks of the 'containers' Haskell library on a
@@ -748,8 +743,8 @@ summarizeEvents RunOptions{paymentWindow} events = SimulationSummary
           }
         )
       _ -> (volume, st)
-    countIf predicate st get =
-      if predicate then get st + 1 else get st
+    countIf predicate st fn =
+      if predicate then fn st + 1 else fn st
     asDouble = fromIntegral @_ @Double . unLovelace
   averageTransaction =
     ada $ Lovelace $ unLovelace volumeTotal `div` (numberOfTransactions ^. #belowPaymentWindow)

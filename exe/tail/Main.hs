@@ -18,7 +18,6 @@ import Hydra.Tail.Simulation.Options (
   Command (..),
   parseCommand,
   settlementDelay,
-  slotLength,
   withProgressReport,
  )
 import Hydra.Tail.Simulation.SlotNo (unSlotNo)
