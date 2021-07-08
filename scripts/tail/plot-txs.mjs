@@ -12,9 +12,9 @@ assert(typeof inputFile === 'string', 'Expected "txs.csv" input filepath as 1st 
 
 const txs = readCsvFileSync(inputFile);
 const svgFile = inputFile.replace("csv", "svg");
-fs.writeFileSync(svgFile, await confirmationTimes(txs));
+fs.writeFileSync(svgFile, await confirmationTimes(svgFile.replace(".svg",""), txs));
 
-async function confirmationTimes(txs) {
+async function confirmationTimes(name, txs) {
   let data = [];
   for (let i = 0; i < txs.length; i++) {
     // Parse scientific notation into 'Number'
@@ -35,7 +35,7 @@ async function confirmationTimes(txs) {
     data: {
       // labels,
       datasets: [{
-        label: "confirmationTimes",
+        label: name,
         fill: true,
         backgroundColor: "#f8c291",
         data
