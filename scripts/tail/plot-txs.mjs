@@ -8,10 +8,11 @@ const height = 1080;
 const chartJSNodeCanvas = new chartjs.ChartJSNodeCanvas({ width, height });
 
 const inputFile = process.argv[2];
-assert(typeof inputFile === 'string', 'Expected "confirmedTransactions.csv" input filepath as 1st argument');
+assert(typeof inputFile === 'string', 'Expected "txs.csv" input filepath as 1st argument');
 
 const txs = readCsvFileSync(inputFile);
-fs.writeFileSync("confirmationTimes.svg", await confirmationTimes(txs));
+const svgFile = inputFile.replace("csv", "svg");
+fs.writeFileSync(svgFile, await confirmationTimes(txs));
 
 async function confirmationTimes(txs) {
   let data = [];
