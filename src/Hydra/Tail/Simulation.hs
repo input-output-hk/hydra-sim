@@ -134,7 +134,7 @@ prepareSimulation options@PrepareOptions{numberOfClients,duration} = do
   newStdGen >>= evalStateT events
 
 runSimulation :: RunOptions -> [Event] -> Trace ()
-runSimulation opts@RunOptions{slotLength,serverOptions} events = runSimTrace $ do
+runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
   let (serverId, clientIds) = (0, [1..fromInteger (getNumberOfClients events)])
   server <- newServer serverId clientIds serverOptions
   clients <- forM clientIds $ \clientId -> do
@@ -143,7 +143,7 @@ runSimulation opts@RunOptions{slotLength,serverOptions} events = runSimTrace $ d
   void $ async $ concurrently_
     (runServer trServer opts server)
     (forConcurrently_ clients (runClient trClient (trim events) serverId opts))
-  threadDelay (durationOf events slotLength)
+  threadDelay (durationOf opts events)
  where
   -- We remove any transaction that is above the payment window, for they are
   -- actually unprocessable by the server (theoritically, transactions can be as
@@ -755,9 +755,10 @@ summarizeEvents RunOptions{paymentWindow} events = SimulationSummary
     ada $ Lovelace $ unLovelace volumeTotal `div` (numberOfTransactions ^. #belowPaymentWindow)
   lastSlot = last events ^. #slot
 
-durationOf :: [Event] -> DiffTime -> DiffTime
-durationOf events slotLength =
-  slotLength * fromIntegral (unSlotNo $ succ $ last events ^. #slot)
+-- | Calculate simulation time as the last event + twice the settlement delay.
+durationOf :: RunOptions -> [Event] -> DiffTime
+durationOf RunOptions{slotLength, settlementDelay} events =
+  slotLength * fromIntegral (unSlotNo $ (last events ^. #slot) + 2 * settlementDelay)
 
 getNumberOfClients :: [Event] -> Integer
 getNumberOfClients =

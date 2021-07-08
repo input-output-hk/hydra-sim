@@ -39,8 +39,9 @@ main = do
       let trace = runSimulation options events
       txs <- withProgressReport (lastSlot summary) options $ \reportProgress ->
         analyzeSimulation reportProgress options summary events trace
-      -- REVIEW(SN): in tail we did optionally "discardEdges"
-      let duration = durationOf events (slotLength options)
+      -- REVIEW(SN): in tail we did optionally "discardEdges"; here we do
+      -- simulate longer than the last event (see 'durationOf')
+      let duration = durationOf options events
       pPrint $ mkAnalyze duration summary txs
 
       let resultName =
