@@ -2,7 +2,6 @@ module Main where
 
 import Prelude
 
-import Data.Maybe (isJust)
 import Hydra.Tail.Simulation (
   SimulationSummary (..),
   analyzeSimulation,
@@ -17,6 +16,7 @@ import Hydra.Tail.Simulation (
  )
 import Hydra.Tail.Simulation.Options (
   Command (..),
+  RunOptions,
   parseCommand,
   proactiveSnapshot,
   settlementDelay,
@@ -45,16 +45,28 @@ main = do
       let duration = durationOf options events
       pPrint $ mkAnalyze duration summary txs
 
-      let resultName =
-            "txs-"
-              <> show (numberOfClients summary)
-              <> "clients-"
-              <> show (unSlotNo $ lastSlot summary)
-              <> "slots-"
-              <> show (unSlotNo $ settlementDelay options)
-              <> "s"
-              <> (if isJust $ proactiveSnapshot options then "-proactive" else "")
-              <> ".csv"
+      let res = resultName options summary
+      putStrLn $ "Writing confirmation times into: " <> res
+      writeTransactions res txs
 
-      putStrLn $ "Writing confirmation times into: " <> resultName
-      writeTransactions resultName txs
+resultName :: RunOptions -> SimulationSummary -> String
+resultName options summary =
+  "txs"
+    <> clients
+    <> slots
+    <> settlement
+    <> proactive
+    <> ".csv"
+ where
+  clients =
+    "-" <> show (numberOfClients summary) <> "clients"
+
+  slots =
+    "-" <> show (unSlotNo $ lastSlot summary) <> "slots"
+
+  settlement =
+    "-" <> show (unSlotNo $ settlementDelay options) <> "s"
+
+  proactive = case proactiveSnapshot options of
+    Nothing -> ""
+    Just frac -> "-" <> show frac <> "p"
