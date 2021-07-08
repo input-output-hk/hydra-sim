@@ -98,6 +98,9 @@ data RunOptions = RunOptions
     -- ^ payment window parameter (a.k.a W), that is, the budget of each client before needing a snapshot.
   , settlementDelay :: SlotNo
     -- ^ Number of slots needed for a snapshot to be settled.
+  , proactiveSnapshot :: Maybe Double
+    -- ^ If and when to pro-actively snapshot as a client, e.g. 0.8 would
+    -- snapshot when reaching 80% of the window budget.
   , verbosity :: Verbosity
     -- ^ Whether to print progress and additional information.
   , serverOptions :: ServerOptions
@@ -131,6 +134,7 @@ runOptionsParser = RunOptions
   <$> slotLengthOption
   <*> optional paymentWindowOption
   <*> settlementDelayOption
+  <*> optional proactiveSnapshotOption
   <*> verbosityFlag
   <*> serverOptionsOption
 
@@ -155,6 +159,13 @@ settlementDelayOption = option (maybeReader readSlotNo) $ mempty
   <> value 100
   <> showDefault
   <> help "Number of slots needed for a snapshot to be settled."
+
+proactiveSnapshotOption :: Parser Double
+proactiveSnapshotOption = option auto $ mempty
+  <> long "pro-active-snapshot"
+  <> metavar "FRAC"
+  <> showDefault
+  <> help "At which fraction of the payment window, a client does perform a snapshot pro-actively."
 
 verbosityFlag :: Parser Verbosity
 verbosityFlag = flag Verbose Quiet $ mempty

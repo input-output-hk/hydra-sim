@@ -435,6 +435,12 @@ runServer tracer options Server{multiplexer, registry} = do
               pure $ Just (st, modifyCurrent (\x -> x - sent tx) balance, mailbox, pending)
 
           sendTo multiplexer clientId (AckTx $ txRef tx)
+
+        -- TODO(SN): Check whether we should send 'NeedSnapshot' for pro-active
+        -- snapshotting (after the tx). Logically this would be done on the
+        -- client-side but we have the payment window 'registry' only on the
+        -- server for now.
+
         serverMain
 
       (clientId, Pull) -> do
@@ -584,6 +590,10 @@ runClient tracer events serverId opts Client{multiplexer, identifier} = do
   clientMain var =
     atomically (getMessage multiplexer) >>= \case
       (_, AckTx{}) ->
+        -- NOTE(SN): For pro-active snapshot handling, we would ideally keep
+        -- track for the client's payment window here and decide whether or not
+        -- to snapshot. For simplicity reasons, this is also shifted to the
+        -- server (for now) as we do track payment windows there.
         pure ()
       (_, NotifyTx{}) ->
         pure ()
