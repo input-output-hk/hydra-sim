@@ -141,6 +141,10 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
   void $ async $ concurrently_
     (runServer trServer opts server)
     (forConcurrently_ clients (runClient trClient (trim events) serverId opts))
+  -- XXX(SN): This does not take into account that there might still be clients
+  -- running and this likely leads to a differing number of confirmed
+  -- transactions for the same events dataset with different parameters (e.g.
+  -- payment window or pro-active snapshot limit)
   threadDelay (durationOf opts events)
  where
   -- We remove any transaction that is above the payment window, for they are
@@ -586,6 +590,12 @@ newClient identifier = do
   inboundBufferSize = 1000
   region = LondonAWS
 
+-- | Run a client given a list of events. The client does work through all of
+-- these events and react on messages from the server at the same time.
+--
+-- NOTE: Although events are scheduled for a certain 'SlotNo', there is no
+-- global notion of time and clients to increment their own 'currentSlot', which
+-- might be delayed due to the blocking nature of snapshotting.
 runClient
   :: forall m. (MonadAsync m, MonadTimer m, MonadThrow m)
   => Tracer m TraceClient
