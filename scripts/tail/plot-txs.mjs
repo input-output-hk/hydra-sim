@@ -15,25 +15,20 @@ const svgFile = inputFile.replace("csv", "svg");
 fs.writeFileSync(svgFile, await confirmationTimes(svgFile.replace(".svg",""), txs));
 
 async function confirmationTimes(name, txs) {
-  let data = [];
-  for (let i = 0; i < txs.length; i++) {
-    // Parse scientific notation into 'Number'
-    const t = txs[i][1];
-    if (t != undefined) {
-      const confTime = JSON.parse(t);
-      data.push({ x: i, y: confTime });
-    }
-  }
+  let data = txs.filter((entry) => entry.length == 3).map((entry) => {
+    const amount = JSON.parse(entry[1]);
+    const confTime = JSON.parse(entry[2]);
+    return {x: amount, y: confTime};
+  });
   const configuration = {
     type: 'scatter',
     options: {
       scales: {
-        x: { display: true, },
-        y: { display: true, }
+        x: { title: "amount", },
+        y: { title: "confirmation time" }
       }
     },
     data: {
-      // labels,
       datasets: [{
         label: name,
         fill: true,

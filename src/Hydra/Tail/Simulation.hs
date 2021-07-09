@@ -180,7 +180,7 @@ data Analyze = Analyze
     -- relevant.
   } deriving (Generic, Show)
 
-type Transactions = Map (TxRef MockTx) [DiffTime]
+type Transactions = Map (TxRef MockTx) (MockTx, [DiffTime])
 
 analyzeSimulation
   :: forall m. Monad m
@@ -193,17 +193,17 @@ analyzeSimulation
 analyzeSimulation notify RunOptions{slotLength} summary _events trace = do
   (confirmations, _) <-
     let fn :: (ThreadLabel, Time, TraceTailSimulation)
-           -> (Map (TxRef MockTx) [DiffTime], SlotNo)
-           -> m (Map (TxRef MockTx) [DiffTime], SlotNo)
+           -> (Map (TxRef MockTx) (MockTx, [DiffTime]), SlotNo)
+           -> m (Map (TxRef MockTx) (MockTx, [DiffTime]), SlotNo)
         fn = \case
           (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId (AckTx ref)))) ->
             (\(!m, !sl) -> pure
-              ( Map.update (\ts -> Just (t : ts)) ref m
+              ( Map.update (\(tx, ts) -> Just (tx, t : ts)) ref m
               , sl
               ))
 
           (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId (NewTx tx)))) ->
-            (\(!m, !sl) -> pure (Map.insert (txRef tx) [t] m, sl))
+            (\(!m, !sl) -> pure (Map.insert (txRef tx) (tx, [t]) m, sl))
 
           (_threadLabel, _time, TraceClient (TraceClientWakeUp sl')) ->
             (\(!m, !sl) ->
@@ -229,11 +229,11 @@ mkAnalyze
   -> Analyze
 mkAnalyze duration SimulationSummary{numberOfTransactions} txs =
   let confirmedTxs =
-        Map.elems $ Map.filter ((== 2) . length) txs
+        Map.elems $ Map.filter ((== 2) . length . snd) txs
 
       totalConfirmationTime =
         diffTimeToSeconds $ foldl' (\total -> \case
-          [end, start] -> total + (end - start)
+          (_, [end, start]) -> total + (end - start)
           _ -> total) 0 confirmedTxs
 
       numberOfConfirmedTransactions =
@@ -252,12 +252,12 @@ mkAnalyze duration SimulationSummary{numberOfTransactions} txs =
 writeTransactions :: FilePath -> Transactions -> IO ()
 writeTransactions filepath transactions = do
   TIO.writeFile filepath $ T.unlines $
-    "txId,confirmationTime"
+    "txId,amount,confirmationTime"
     : mapMaybe toCsv (Map.toList transactions)
  where
-  toCsv :: (TxRef MockTx, [DiffTime]) -> Maybe Text
-  toCsv (TxRef ref, [end, start]) =
-    Just $ replaceCommas ref <> "," <> tshow (diffTimeToSeconds (end - start))
+  toCsv :: (TxRef MockTx, (MockTx, [DiffTime])) -> Maybe Text
+  toCsv (TxRef ref, (tx, [end, start])) =
+    Just $ replaceCommas ref <> "," <> tshow (unLovelace $ txAmount tx) <> "," <> tshow (diffTimeToSeconds (end - start))
   toCsv _ =
     Nothing
 
