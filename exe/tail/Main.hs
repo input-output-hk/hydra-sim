@@ -9,6 +9,7 @@ import Hydra.Tail.Simulation (
   mkAnalyze,
   prepareSimulation,
   readEventsThrow,
+  readTransactionsThrow,
   runSimulation,
   summarizeEvents,
   writeEvents,
@@ -46,6 +47,9 @@ main = do
       let res = resultName options summary
       putStrLn $ "Writing confirmation times into: " <> res
       writeTransactions res txs
+    Analyze filepath -> do
+      txs <- readTransactionsThrow filepath
+      pPrint txs
 
 resultName :: RunOptions -> SimulationSummary -> String
 resultName options summary =

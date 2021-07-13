@@ -68,13 +68,14 @@ import HydraSim.Sized (
 data Command
     = Prepare PrepareOptions FilePath
     | Run RunOptions FilePath
+    | Analyze FilePath
     deriving (Generic, Show)
 
 parseCommand :: IO Command
 parseCommand =
     customExecParser (prefs showHelpOnEmpty) parserInfo
   where
-    parser = subparser (prepareMod <> runMod)
+    parser = subparser (prepareMod <> runMod <> analyzeMod)
 
     parserInfo :: ParserInfo Command
     parserInfo =
@@ -95,6 +96,13 @@ runMod =
         info
             (helper <*> (Run <$> runOptionsParser <*> filepathArgument))
             (progDesc "Run a simulation given an event schedule")
+
+analyzeMod :: Mod CommandFields Command
+analyzeMod =
+    command "analyze" $
+        info
+            (helper <*> (Analyze <$> filepathArgument))
+            (progDesc "Re-analyze results of a previous simulation run")
 
 filepathArgument :: Parser FilePath
 filepathArgument =

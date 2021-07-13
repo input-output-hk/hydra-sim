@@ -93,6 +93,7 @@ import HydraSim.Tx.Class (Tx (..))
 import HydraSim.Types (NodeId (..))
 import Safe (readMay)
 import System.Random (StdGen, newStdGen, randomR)
+import Data.Foldable (fold)
 
 --
 -- Simulation
@@ -231,25 +232,6 @@ mkAnalyze duration SimulationSummary{numberOfTransactions} txs =
             , averageConfirmationTime =
                 totalConfirmationTime / fromIntegral numberOfConfirmedTransactions
             }
-
-writeTransactions :: FilePath -> Transactions -> IO ()
-writeTransactions filepath transactions = do
-    TIO.writeFile filepath $
-        T.unlines $
-            "txId,confirmationTime" :
-            mapMaybe toCsv (Map.toList transactions)
-  where
-    toCsv :: (TxRef MockTx, [DiffTime]) -> Maybe Text
-    toCsv (TxRef ref, [end, start]) =
-        Just $ replaceCommas ref <> "," <> tshow (diffTimeToSeconds (end - start))
-    toCsv _ =
-        Nothing
-
-    replaceCommas :: Text -> Text
-    replaceCommas = T.map (\c -> if c == ',' then ';' else c)
-
-tshow :: Show a => a -> Text
-tshow = T.pack . show
 
 --
 -- (Simplified) Tail-Protocol
@@ -792,7 +774,7 @@ getNumberOfClients :: [Event] -> Integer
 getNumberOfClients =
     toInteger . getNodeId . from . maximumBy (\a b -> getNodeId (from a) `compare` getNodeId (from b))
 
-newtype CouldntParseCsv = CouldntParseCsv FilePath
+data CouldntParseCsv = CouldntParseCsv FilePath Text
     deriving (Show)
 instance Exception CouldntParseCsv
 
@@ -807,7 +789,7 @@ readEventsThrow :: FilePath -> IO [Event]
 readEventsThrow filepath = do
     text <- TIO.readFile filepath
     case traverse eventFromCsv . drop 1 . T.lines $ text of
-        Nothing -> throwIO $ CouldntParseCsv filepath
+        Nothing -> throwIO $ CouldntParseCsv filepath ""
         Just events -> pure events
 
 eventToCsv :: Event -> Text
@@ -880,6 +862,43 @@ eventFromCsv line =
     readRecipients = \case
         "" -> Just []
         ssv -> traverse readClientId (T.splitOn " " ssv)
+
+writeTransactions :: FilePath -> Transactions -> IO ()
+writeTransactions filepath transactions = do
+    TIO.writeFile filepath $
+        T.unlines $
+            "txId,confirmationTime" :
+            mapMaybe toCsv (Map.toList transactions)
+  where
+    toCsv :: (TxRef MockTx, [DiffTime]) -> Maybe Text
+    toCsv (TxRef ref, [end, start]) =
+        Just $ replaceCommas ref <> "," <> tshow (diffTimeToSeconds (end - start))
+    toCsv _ =
+        Nothing
+
+    replaceCommas :: Text -> Text
+    replaceCommas = T.map (\c -> if c == ',' then ';' else c)
+
+readTransactionsThrow :: FilePath -> IO Transactions
+readTransactionsThrow filepath = do
+    text <- TIO.readFile filepath
+    fmap fold . mapM fromCsv $ drop 1 . T.lines $ text
+  where
+    fromCsv line =
+        case T.splitOn "," line of
+            [txid, ct] ->
+                Map.singleton (TxRef txid) <$> readConfirmationTimeAsInterval ct
+            _ ->
+                throwIO $ CouldntParseCsv filepath $ "invalid line: " <> line
+
+    readConfirmationTimeAsInterval t = do
+        -- REVIEW(SN): Uses 'NominalDiffTime' for reading, why not everything?
+        case readMay (T.unpack t) of
+            Nothing -> throwIO $ CouldntParseCsv filepath $ "when parsing confirmation time: " <> t
+            Just secs -> pure [0, realToFrac (secs :: Double)]
+
+tshow :: Show a => a -> Text
+tshow = T.pack . show
 
 --
 -- Helpers
