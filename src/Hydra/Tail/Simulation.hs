@@ -876,7 +876,7 @@ readTransactionsThrow filepath = do
         -- REVIEW(SN): Uses 'NominalDiffTime' for reading, why not everything?
         case readMay (T.unpack t) of
             Nothing -> throwIO $ CouldntParseCsv filepath $ "when parsing confirmation time: " <> t
-            Just secs -> pure [0, realToFrac (secs :: Double)]
+            Just secs -> pure [realToFrac (secs :: Double), 0]
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show
