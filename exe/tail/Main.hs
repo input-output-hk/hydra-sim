@@ -5,7 +5,6 @@ import Prelude
 import Hydra.Tail.Simulation (
   SimulationSummary (..),
   analyzeSimulation,
-  durationOf,
   mkAnalyze,
   prepareSimulation,
   readEventsThrow,
@@ -36,20 +35,21 @@ main = do
     Run options filepath -> do
       pPrint options
       events <- readEventsThrow filepath
+
       let summary = summarizeEvents options events
       pPrint summary
+
       let trace = runSimulation options events
       txs <- withProgressReport (lastSlot summary) options $ \reportProgress ->
-        analyzeSimulation reportProgress options summary events trace
-      let duration = durationOf options events
-      pPrint $ mkAnalyze duration summary txs
+        analyzeSimulation reportProgress trace
+      pPrint $ mkAnalyze txs
 
       let res = resultName options summary
       putStrLn $ "Writing confirmation times into: " <> res
       writeTransactions res txs
     Analyze filepath -> do
       txs <- readTransactionsThrow filepath
-      pPrint txs
+      pPrint $ mkAnalyze txs
 
 resultName :: RunOptions -> SimulationSummary -> String
 resultName options summary =
