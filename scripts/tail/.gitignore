@@ -1,2 +1,10 @@
 node_modules/
 .node_repl_history
+
+# Downloaded chain data
+blocks.json
+
+# Only keep gzipped datasets and results
+*.csv
+# Plots can be created out of csv using plot.mjs and plot-txs.mjs
+*.svg
