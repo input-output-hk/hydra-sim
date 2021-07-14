@@ -151,6 +151,8 @@ data Analyze = Analyze
     , -- | Average time for a transaction to get 'confirmed'. This includes snapshotting when
       -- relevant.
       averageConfirmationTime :: Double
+    , -- | How many confirmed transactions had been confirmed within one slot (== typicall within 1 second).
+      percentConfirmedWithin1Slot :: Double
     }
     deriving (Generic, Show)
 
@@ -194,25 +196,30 @@ analyzeSimulation notify trace = do
 
 mkAnalyze :: Transactions -> Analyze
 mkAnalyze txs =
-    let confirmedTxs =
-            Map.elems $ Map.filter ((== 2) . length) txs
+    Analyze
+        { numberOfConfirmedTransactions
+        , averageConfirmationTime
+        , percentConfirmedWithin1Slot
+        }
+  where
+    numberOfConfirmedTransactions = length confirmationTimes
 
-        totalConfirmationTime =
-            diffTimeToSeconds $
-                foldl'
-                    ( \total -> \case
-                        [end, start] -> total + (end - start)
-                        _ -> total
-                    )
-                    0
-                    confirmedTxs
+    confirmationTimes =
+        mapMaybe convertConfirmationTime $ Map.elems txs
 
-        numberOfConfirmedTransactions = length confirmedTxs
-     in Analyze
-            { numberOfConfirmedTransactions
-            , averageConfirmationTime =
-                totalConfirmationTime / fromIntegral numberOfConfirmedTransactions
-            }
+    convertConfirmationTime = \case
+        [end, start] -> Just . diffTimeToSeconds $ end - start
+        _ -> Nothing
+
+    averageConfirmationTime =
+        totalConfirmationTime / fromIntegral numberOfConfirmedTransactions
+
+    totalConfirmationTime = sum confirmationTimes
+
+    percentConfirmedWithin1Slot =
+      length (filter (< 1) confirmationTimes) `percentOf` numberOfConfirmedTransactions
+
+    percentOf a b = (fromIntegral a :: Double) / fromIntegral b
 
 --
 -- (Simplified) Tail-Protocol
