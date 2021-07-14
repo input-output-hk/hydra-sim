@@ -1,0 +1,3 @@
+# Only keep gzipped results, svgs can be created out of csv using plot-txs.mjs
+*.csv
+*.svg
