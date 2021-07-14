@@ -49,11 +49,13 @@ import Hydra.Tail.Simulation.MockTx (
     sent,
  )
 import Hydra.Tail.Simulation.Options (
+    AnalyzeOptions (..),
     ClientOptions (..),
     NetworkCapacity (..),
     PrepareOptions (..),
     RunOptions (..),
     ServerOptions (..),
+    defaultAnalyzeOptions,
     kbitsPerSecond,
  )
 import Hydra.Tail.Simulation.PaymentWindow (
@@ -152,7 +154,7 @@ data Analyze = Analyze
       -- relevant.
       averageConfirmationTime :: Double
     , -- | How many confirmed transactions had been confirmed within one slot, 10 slots and one tenth of a slots
-    percentConfirmedWithin1Slot :: Double
+      percentConfirmedWithin1Slot :: Double
     , percentConfirmedWithin10Slots :: Double
     , percentConfirmedWithinTenthOfSlot :: Double
     }
@@ -187,7 +189,7 @@ analyzeSimulation notify trace = do
                         if sl' > sl
                             then
                                 if sl' /= 0 && unSlotNo sl' `mod` 60 == 0
-                                    then notify sl' (Just $ mkAnalyze m) $> (m, sl')
+                                    then notify sl' (Just $ mkAnalyze defaultAnalyzeOptions m) $> (m, sl')
                                     else notify sl' Nothing $> (m, sl')
                             else pure (m, sl)
                     )
@@ -196,8 +198,8 @@ analyzeSimulation notify trace = do
          in foldTraceEvents fn (mempty, -1) trace
     pure confirmations
 
-mkAnalyze :: Transactions -> Analyze
-mkAnalyze txs =
+mkAnalyze :: AnalyzeOptions -> Transactions -> Analyze
+mkAnalyze AnalyzeOptions{discardEdges} txs =
     Analyze
         { numberOfConfirmedTransactions
         , averageConfirmationTime
@@ -209,7 +211,11 @@ mkAnalyze txs =
     numberOfConfirmedTransactions = length confirmationTimes
 
     confirmationTimes =
-        mapMaybe convertConfirmationTime $ Map.elems txs
+        mapMaybe convertConfirmationTime . maybeDiscardEdges $ Map.elems txs
+
+    maybeDiscardEdges = case discardEdges of
+        Nothing -> id
+        Just n -> reverse . drop n . reverse . drop n
 
     convertConfirmationTime = \case
         [end, start] -> Just . diffTimeToSeconds $ end - start
@@ -221,13 +227,13 @@ mkAnalyze txs =
     totalConfirmationTime = sum confirmationTimes
 
     percentConfirmedWithin1Slot =
-      length (filter (< 1) confirmationTimes) `percentOf` numberOfConfirmedTransactions
+        length (filter (< 1) confirmationTimes) `percentOf` numberOfConfirmedTransactions
 
     percentConfirmedWithin10Slots =
-      length (filter (< 10) confirmationTimes) `percentOf` numberOfConfirmedTransactions
+        length (filter (< 10) confirmationTimes) `percentOf` numberOfConfirmedTransactions
 
     percentConfirmedWithinTenthOfSlot =
-      length (filter (< 0.1) confirmationTimes) `percentOf` numberOfConfirmedTransactions
+        length (filter (< 0.1) confirmationTimes) `percentOf` numberOfConfirmedTransactions
 
     percentOf a b = (fromIntegral a :: Double) / fromIntegral b
 

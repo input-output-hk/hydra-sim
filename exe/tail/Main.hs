@@ -17,6 +17,7 @@ import Hydra.Tail.Simulation (
 import Hydra.Tail.Simulation.Options (
   Command (..),
   RunOptions,
+  defaultAnalyzeOptions,
   parseCommand,
   proactiveSnapshot,
   settlementDelay,
@@ -42,14 +43,14 @@ main = do
       let trace = runSimulation options events
       txs <- withProgressReport (lastSlot summary) options $ \reportProgress ->
         analyzeSimulation reportProgress trace
-      pPrint $ mkAnalyze txs
+      pPrint $ mkAnalyze defaultAnalyzeOptions txs
 
       let res = resultName options summary
       putStrLn $ "Writing confirmation times into: " <> res
       writeTransactions res txs
-    Analyze filepath -> do
+    Analyze options filepath -> do
       txs <- readTransactionsThrow filepath
-      pPrint $ mkAnalyze txs
+      pPrint $ mkAnalyze options txs
 
 resultName :: RunOptions -> SimulationSummary -> String
 resultName options summary =

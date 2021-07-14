@@ -5,6 +5,8 @@
 module Hydra.Tail.Simulation.Options (
     Command (..),
     parseCommand,
+    AnalyzeOptions (..),
+    defaultAnalyzeOptions,
     RunOptions (..),
     PrepareOptions (..),
     ClientOptions (..),
@@ -68,7 +70,7 @@ import HydraSim.Sized (
 data Command
     = Prepare PrepareOptions FilePath
     | Run RunOptions FilePath
-    | Analyze FilePath
+    | Analyze AnalyzeOptions FilePath
     deriving (Generic, Show)
 
 parseCommand :: IO Command
@@ -95,13 +97,13 @@ runMod =
     command "run" $
         info
             (helper <*> (Run <$> runOptionsParser <*> filepathArgument))
-            (progDesc "Run a simulation given an event schedule")
+            (progDesc "Run and analyze a simulation given an event schedule")
 
 analyzeMod :: Mod CommandFields Command
 analyzeMod =
     command "analyze" $
         info
-            (helper <*> (Analyze <$> filepathArgument))
+            (helper <*> (Analyze <$> analyzeOptionsParser <*> filepathArgument))
             (progDesc "Re-analyze results of a previous simulation run")
 
 filepathArgument :: Parser FilePath
@@ -140,6 +142,13 @@ data RunOptions = RunOptions
       serverOptions :: ServerOptions
     }
     deriving (Generic, Show)
+
+newtype AnalyzeOptions = AnalyzeOptions
+    {discardEdges :: Maybe Int}
+    deriving (Generic, Show)
+
+defaultAnalyzeOptions :: AnalyzeOptions
+defaultAnalyzeOptions = AnalyzeOptions Nothing
 
 prepareOptionsParser :: Parser PrepareOptions
 prepareOptionsParser =
@@ -310,6 +319,17 @@ clientSubmitLikelihoodOption =
             <> value (1 % 3)
             <> showDefault
             <> help "Likelihood of a client to submit a transaction when it goes online."
+
+analyzeOptionsParser :: Parser AnalyzeOptions
+analyzeOptionsParser =
+    AnalyzeOptions <$> optional discardEdgesOption
+
+discardEdgesOption :: Parser Int
+discardEdgesOption =
+    option auto $
+        long "discard-edges"
+            <> help "Discard the first and last N samples (allow for warmup/cooldown)"
+            <> showDefault
 
 --
 -- NetworkCapacity
