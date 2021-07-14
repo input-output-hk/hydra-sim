@@ -57,7 +57,10 @@ received MockTx{txAmount, txRecipients} =
         unLovelace txAmount `div` toInteger (length txRecipients)
 
 instance Tx MockTx where
-    newtype TxRef MockTx = TxRef Text
+    data TxRef MockTx = TxRef
+        { slot :: Int
+        , ref :: Text
+        }
         deriving (Eq, Ord, Show)
 
     newtype TxInput MockTx = TxInput ()
@@ -94,6 +97,9 @@ mockTx (NodeId i) (SlotNo sl) txAmount@(Lovelace am) txSize@(Size sz) txRecipien
     MockTx{txId, txAmount, txSize, txRecipients}
   where
     txId =
-        TxRef $
-            T.pack
-                (show i <> show sl <> show am <> show sz <> show (getNodeId <$> txRecipients))
+        TxRef
+            { slot = fromInteger sl
+            , ref =
+                T.pack
+                    (show sl <> show i <> show am <> show sz <> show (getNodeId <$> txRecipients))
+            }

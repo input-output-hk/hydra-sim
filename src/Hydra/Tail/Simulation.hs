@@ -211,11 +211,11 @@ mkAnalyze AnalyzeOptions{discardEdges} txs =
     numberOfConfirmedTransactions = length confirmationTimes
 
     confirmationTimes =
-        mapMaybe convertConfirmationTime . maybeDiscardEdges $ Map.elems txs
+        mapMaybe (convertConfirmationTime . snd) . maybeDiscardEdges $ Map.toList txs
 
-    maybeDiscardEdges = case discardEdges of
-        Nothing -> id
-        Just n -> reverse . drop n . reverse . drop n
+    maybeDiscardEdges xs = case discardEdges of
+        Nothing -> xs
+        Just n -> filter (\(TxRef{slot},_) -> slot > n && slot < (length xs - n)) xs
 
     convertConfirmationTime = \case
         [end, start] -> Just . diffTimeToSeconds $ end - start
@@ -622,7 +622,7 @@ runClient tracer events serverId opts Client{multiplexer, identifier} = do
         (e : q)
             | from e /= identifier ->
                 clientEventLoop var currentSlot q
-        (e : q) | slot e <= currentSlot -> do
+        (e : q) | (slot :: Event -> SlotNo) e <= currentSlot -> do
             withTMVar_ var $ \st -> do
                 when (st == Offline) $ do
                     traceWith tracer (TraceClientWakeUp currentSlot)
@@ -871,12 +871,12 @@ writeTransactions :: FilePath -> Transactions -> IO ()
 writeTransactions filepath transactions = do
     TIO.writeFile filepath $
         T.unlines $
-            "txId,confirmationTime" :
+            "slot,ref,confirmationTime" :
             mapMaybe toCsv (Map.toList transactions)
   where
     toCsv :: (TxRef MockTx, [DiffTime]) -> Maybe Text
-    toCsv (TxRef ref, [end, start]) =
-        Just $ replaceCommas ref <> "," <> tshow (diffTimeToSeconds (end - start))
+    toCsv (TxRef{slot, ref}, [end, start]) =
+        Just $ tshow slot <> "," <> replaceCommas ref <> "," <> tshow (diffTimeToSeconds (end - start))
     toCsv _ =
         Nothing
 
@@ -890,8 +890,9 @@ readTransactionsThrow filepath = do
   where
     fromCsv line =
         case T.splitOn "," line of
-            [txid, ct] ->
-                Map.singleton (TxRef txid) <$> readConfirmationTimeAsInterval ct
+            [slot, ref, ct] -> do
+                i <- readIO $ T.unpack slot
+                Map.singleton (TxRef i ref) <$> readConfirmationTimeAsInterval ct
             _ ->
                 throwIO $ CouldntParseCsv filepath $ "invalid line: " <> line
 
