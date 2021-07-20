@@ -177,7 +177,14 @@ analyzeSimulation notify trace = do
                 (_threadLabel, Time _t, TraceClient (TraceClientAck clientId tx)) ->
                     ( \(!m, !sl) ->
                             pure
-                                ( Map.alter (updateBalance tx) clientId m
+                                ( Map.alter (updateBalance (+ txAmount tx)) clientId m
+                                , sl
+                                )
+                    )
+                (_threadLabel, Time _t, TraceClient (TraceClientNotify clientId tx)) ->
+                    ( \(!m, !sl) ->
+                            pure
+                                ( Map.alter (updateBalance (subtract $ txAmount tx)) clientId m
                                 , sl
                                 )
                     )
@@ -195,9 +202,9 @@ analyzeSimulation notify trace = do
          in foldTraceEvents fn (mempty, -1) trace
     pure mempty
  where
-  updateBalance tx = \case
-    Nothing -> Just $ txAmount tx
-    Just a -> Just $ a + txAmount tx
+  updateBalance fn = \case
+    Nothing -> Just $ fn 0
+    Just a -> Just $ fn a
 
 mkAnalyze :: AnalyzeOptions -> Transactions -> Analyze
 mkAnalyze AnalyzeOptions{discardEdges} txs =
@@ -619,8 +626,8 @@ runClient tracer events serverId opts Client{multiplexer, identifier} = do
                 -- to snapshot. For simplicity reasons, this is also shifted to the
                 -- server (for now) as we do track payment windows there.
                 traceWith tracer (TraceClientAck identifier tx)
-            (_, NotifyTx{}) ->
-                pure ()
+            (_, NotifyTx tx) ->
+                traceWith tracer (TraceClientNotify identifier tx)
             (_, NeedSnapshot{}) -> do
                 -- NOTE: Holding on the MVar here prevents the client's event loop from
                 -- processing any new event. The other will block until the snapshot is done.
@@ -720,6 +727,7 @@ data TraceClient
     = TraceClientMultiplexer (TraceMultiplexer Msg)
     | TraceClientWakeUp SlotNo
     | TraceClientAck ClientId MockTx
+    | TraceClientNotify ClientId MockTx
     deriving (Show)
 
 --
