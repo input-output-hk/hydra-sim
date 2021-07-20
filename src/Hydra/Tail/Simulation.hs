@@ -174,15 +174,13 @@ analyzeSimulation notify trace = do
                 (Map NodeId Lovelace, SlotNo) ->
                 m (Map NodeId Lovelace, SlotNo)
             fn = \case
-                (_threadLabel, Time _t, TraceClient (TraceClientMultiplexer (MPRecvTrailing nodeId (AckTx tx)))) ->
+                (_threadLabel, Time _t, TraceClient (TraceClientAck clientId tx)) ->
                     ( \(!m, !sl) ->
-                        pure
-                            ( Map.alter (updateBalance tx) nodeId m
-                            , sl
-                            )
+                            pure
+                                ( Map.alter (updateBalance tx) clientId m
+                                , sl
+                                )
                     )
-                -- (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId (NewTx tx)))) ->
-                --     (\(!m, !sl) -> pure (Map.insert (txRef tx) [t] m, sl))
                 (_threadLabel, _time, TraceClient (TraceClientWakeUp sl')) ->
                     ( \(!m, !sl) ->
                         if sl' > sl
@@ -615,12 +613,12 @@ runClient tracer events serverId opts Client{multiplexer, identifier} = do
     clientMain :: TMVar m ClientState -> m ()
     clientMain var =
         atomically (getMessage multiplexer) >>= \case
-            (_, AckTx{}) ->
+            (_, AckTx tx) -> do
                 -- NOTE(SN): For pro-active snapshot handling, we would ideally keep
                 -- track for the client's payment window here and decide whether or not
                 -- to snapshot. For simplicity reasons, this is also shifted to the
                 -- server (for now) as we do track payment windows there.
-                pure ()
+                traceWith tracer (TraceClientAck identifier tx)
             (_, NotifyTx{}) ->
                 pure ()
             (_, NeedSnapshot{}) -> do
@@ -721,6 +719,7 @@ stepClient options currentSlot identifier = do
 data TraceClient
     = TraceClientMultiplexer (TraceMultiplexer Msg)
     | TraceClientWakeUp SlotNo
+    | TraceClientAck ClientId MockTx
     deriving (Show)
 
 --
