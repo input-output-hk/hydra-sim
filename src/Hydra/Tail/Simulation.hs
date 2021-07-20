@@ -55,7 +55,6 @@ import Hydra.Tail.Simulation.Options (
     PrepareOptions (..),
     RunOptions (..),
     ServerOptions (..),
-    defaultAnalyzeOptions,
     kbitsPerSecond,
  )
 import Hydra.Tail.Simulation.PaymentWindow (
@@ -165,38 +164,42 @@ type Transactions = Map (TxRef MockTx) [DiffTime]
 analyzeSimulation ::
     forall m.
     Monad m =>
-    (SlotNo -> Maybe Analyze -> m ()) ->
+    (SlotNo -> Maybe (Map NodeId Lovelace) -> m ()) ->
     Trace () ->
     m Transactions
 analyzeSimulation notify trace = do
-    (confirmations, _) <-
+    (_balances, _) <-
         let fn ::
                 (ThreadLabel, Time, TraceTailSimulation) ->
-                (Map (TxRef MockTx) [DiffTime], SlotNo) ->
-                m (Map (TxRef MockTx) [DiffTime], SlotNo)
+                (Map NodeId Lovelace, SlotNo) ->
+                m (Map NodeId Lovelace, SlotNo)
             fn = \case
-                (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId (AckTx ref)))) ->
+                (_threadLabel, Time _t, TraceClient (TraceClientMultiplexer (MPRecvTrailing nodeId (AckTx tx)))) ->
                     ( \(!m, !sl) ->
                         pure
-                            ( Map.update (\ts -> Just (t : ts)) ref m
+                            ( Map.alter (updateBalance tx) nodeId m
                             , sl
                             )
                     )
-                (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId (NewTx tx)))) ->
-                    (\(!m, !sl) -> pure (Map.insert (txRef tx) [t] m, sl))
+                -- (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId (NewTx tx)))) ->
+                --     (\(!m, !sl) -> pure (Map.insert (txRef tx) [t] m, sl))
                 (_threadLabel, _time, TraceClient (TraceClientWakeUp sl')) ->
                     ( \(!m, !sl) ->
                         if sl' > sl
                             then
-                                if sl' /= 0 && unSlotNo sl' `mod` 60 == 0
-                                    then notify sl' (Just $ mkAnalyze defaultAnalyzeOptions m) $> (m, sl')
+                                if sl' /= 0 && unSlotNo sl' `mod` 100 == 0
+                                    then notify sl' (Just m) $> (m, sl')
                                     else notify sl' Nothing $> (m, sl')
                             else pure (m, sl)
                     )
                 _ ->
                     pure
          in foldTraceEvents fn (mempty, -1) trace
-    pure confirmations
+    pure mempty
+ where
+  updateBalance tx = \case
+    Nothing -> Just $ txAmount tx
+    Just a -> Just $ a + txAmount tx
 
 mkAnalyze :: AnalyzeOptions -> Transactions -> Analyze
 mkAnalyze AnalyzeOptions{discardEdges} txs =
@@ -215,7 +218,7 @@ mkAnalyze AnalyzeOptions{discardEdges} txs =
 
     maybeDiscardEdges xs = case discardEdges of
         Nothing -> xs
-        Just n -> filter (\(TxRef{slot},_) -> slot > n && slot < (length xs - n)) xs
+        Just n -> filter (\(TxRef{slot},_) -> slot >= n && slot < (length xs - n)) xs
 
     convertConfirmationTime = \case
         [end, start] -> Just . diffTimeToSeconds $ end - start
@@ -275,7 +278,7 @@ data Msg
     | -- | The server requests a client to perform a snapshot.
       NeedSnapshot
     | -- | The server replies to each client submitting a transaction with an acknowledgement.
-      AckTx !(TxRef MockTx)
+      AckTx !MockTx
     deriving (Generic, Show)
 
 instance Sized Msg where
@@ -427,7 +430,7 @@ runServer tracer options Server{multiplexer, registry} = do
                                             traceWith tracer $ TraceServerStoreInMailbox clientId msg (length mailbox + 1)
                                             pure $ Just (st, modifyCurrent (+ received tx) balance, msg : mailbox, pending)
 
-                            lift $ sendTo multiplexer clientId (AckTx $ txRef tx)
+                            lift $ sendTo multiplexer clientId (AckTx tx)
 
                             modifyM $
                                 updateF clientId $ \(st, balance, mailbox, pending) -> do
