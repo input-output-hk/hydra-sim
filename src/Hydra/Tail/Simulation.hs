@@ -188,6 +188,13 @@ analyzeSimulation notify trace = do
                                 , sl
                                 )
                     )
+                (_threadLabel, Time _t, TraceClient (TraceClientSnapshotDone clientId)) ->
+                    ( \(!m, !sl) ->
+                            pure
+                                ( Map.alter (updateBalance (const 0)) clientId m
+                                , sl
+                                )
+                    )
                 (_threadLabel, _time, TraceClient (TraceClientWakeUp sl')) ->
                     ( \(!m, !sl) ->
                         if sl' > sl
@@ -635,6 +642,7 @@ runClient tracer events serverId opts Client{multiplexer, identifier} = do
                     threadDelay settlementDelay_
                     sendTo multiplexer serverId SnapshotDone
                     pure st
+                traceWith tracer (TraceClientSnapshotDone identifier)
             (nodeId, msg) ->
                 throwIO $ UnexpectedClientMsg nodeId msg
       where
@@ -728,6 +736,7 @@ data TraceClient
     | TraceClientWakeUp SlotNo
     | TraceClientAck ClientId MockTx
     | TraceClientNotify ClientId MockTx
+    | TraceClientSnapshotDone ClientId
     deriving (Show)
 
 --
