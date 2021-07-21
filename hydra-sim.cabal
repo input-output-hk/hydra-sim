@@ -120,6 +120,7 @@ executable hydra-tail-simulation
   build-depends:       base
                      , hydra-sim -any
                      , pretty-simple
+                     , containers
   ghc-options:         -O2 -threaded -rtsopts
 
 executable hydra-head-simulation

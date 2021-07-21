@@ -25,6 +25,7 @@ import Hydra.Tail.Simulation.Options (
  )
 import Hydra.Tail.Simulation.SlotNo (unSlotNo)
 import Text.Pretty.Simple (pPrint)
+import qualified Data.Map as Map
 
 main :: IO ()
 main = do
@@ -41,8 +42,9 @@ main = do
       pPrint summary
 
       let trace = runSimulation options events
-      txs <- withProgressReport (lastSlot summary) options $ \reportProgress ->
-        analyzeSimulation reportProgress trace
+      txs <- withProgressReport (lastSlot summary) options $ \reportProgress -> do
+        let fn = \balances -> (numberOfClients summary - fromIntegral (Map.size balances), balances)
+        analyzeSimulation (\sn x -> reportProgress sn (fn <$> x)) trace
       pPrint $ mkAnalyze defaultAnalyzeOptions txs
 
       let res = resultName options summary
