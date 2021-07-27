@@ -389,7 +389,26 @@ runServer tracer options Server{multiplexer, registry} = do
                                     lift $ sendTo multiplexer client NeedSnapshot
                                     modifyM $
                                         updateF client $ \(_st, balance, mailbox, pending) -> do
-                                            -- NOTE(SN): This seems to be only re-enqueuing it for the sending client!?
+                                            -- NOTE: This enqueues the message for one (and only one) of the
+                                            -- participants. A transaction shall be marked as pending if one of the
+                                            -- participants (sender or recipients) are blocked (require snapshots)
+                                            -- until both clients need to have performed their snapshot.
+                                            -- There's no "ledger" on the server, so if we re-enqueue a transaction
+                                            -- per blocked participant, we'll may replay the transaction more than once!
+                                            --
+                                            -- Thus, it is sufficient (and necessary) to re-enqueue the transaction only
+                                            -- once, for one of the participant. Once that participant is done
+                                            -- snapshotting, it'll retry the transaction and from here we really have
+                                            -- two scenarios:
+                                            --
+                                            -- a) That client happened to be the last one in the transaction which had
+                                            --    to snapshot, and the transaction can now proceed.
+                                            --
+                                            -- b) There's another client which is still blocked. Then, the transaction
+                                            --    will be re-enqueued again, for that client (or at least, for the first
+                                            --    other block client).
+                                            --
+                                            -- Eventually, once all clients are done, it goes through.
                                             let pending' = if ix == (0 :: Int) then NewTx tx : pending else pending
                                             pure $ Just (Blocked, balance, mailbox, pending')
                                 _ -> do
