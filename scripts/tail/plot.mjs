@@ -1,11 +1,11 @@
-import { ChartJSNodeCanvas } from 'chartjs-node-canvas';
+import chartjs from 'chartjs-node-canvas';
 import fs from 'fs';
 import assert from 'assert';
 import { readCsvFileSync } from './utils.mjs';
 
 const width = 960;
 const height = 500;
-const chartJSNodeCanvas = new ChartJSNodeCanvas({ width, height });
+const chartJSNodeCanvas = new chartjs.ChartJSNodeCanvas({ width, height });
 
 const inputFile = process.argv[2];
 assert(typeof inputFile === 'string', 'Expected input filepath as 1st argument');

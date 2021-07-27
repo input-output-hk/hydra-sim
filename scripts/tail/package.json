@@ -14,7 +14,7 @@
     "node": "^14.8"
   },
   "dependencies": {
-    "chart.js": "^3.2.1",
+    "chart.js": "^2.9.4",
     "chartjs-node-canvas": "^3.1.0",
     "ws": "^7.4.5"
   },

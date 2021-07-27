@@ -46,6 +46,8 @@ mkShell rec {
     cabal-plan
     # needed for HLS to work properly, see https://github.com/haskell/haskell-language-server/issues/176
     hspec-discover
+    # For scripts/
+    nodejs-14_x
     # For discovering libs (below)
     pkgconfig
   ];
@@ -53,6 +55,8 @@ mkShell rec {
   libs = [
     libsodium-vrf
     zlib
+    # Used by charting library in scripts/
+    libuuid
   ];
 
   buildInputs = tools ++ libs;
