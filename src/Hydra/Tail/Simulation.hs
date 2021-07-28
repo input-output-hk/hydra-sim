@@ -215,7 +215,9 @@ mkAnalyze AnalyzeOptions{discardEdges} txs =
 
     maybeDiscardEdges xs = case discardEdges of
         Nothing -> xs
-        Just n -> filter (\(TxRef{slot},_) -> slot > n && slot < (length xs - n)) xs
+        Just n -> filter (\(TxRef{slot},_) -> slot > n && slot < (maxSlot - n)) xs
+
+    maxSlot = maximum $ map (\TxRef{slot} -> slot) $ Map.keys txs
 
     convertConfirmationTime = \case
         [end, start] -> Just . diffTimeToSeconds $ end - start
