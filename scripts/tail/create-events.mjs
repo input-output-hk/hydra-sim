@@ -73,7 +73,8 @@ function mkEvents(getClientId, normalize, maxSlot, translateSlot, from, { slot, 
   }
 
   return amount == 0 || recipients.length == 0 ? [] : [
-    { slot: translateSlot(slot), from, msg: 'Pull' },
+    // NOTE: Clients no longer go offline.
+    // { slot: translateSlot(slot), from, msg: 'Pull' },
     { slot: translateSlot(slot), from, msg: { NewTx: { ref, size, recipients, amount } } },
   ];
 }
