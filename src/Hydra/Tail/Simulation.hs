@@ -622,8 +622,8 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
       pending <- withTMVar registry $ \clients -> do
         case Map.lookup clientId clients of
           Nothing -> pure ([], clients)
-          Just (_st, Balance{current}, mailbox, pending) -> do
-            let clients' = Map.insert clientId (Offline, initialBalance current, mailbox, []) clients
+          Just (st, Balance{current}, mailbox, pending) -> do
+            let clients' = Map.insert clientId (st, initialBalance current, mailbox, []) clients
             pure (pending, clients')
       mapM_ handleMessage (reverse $ (clientId,) <$> pending)
     (clientId, msg) ->
