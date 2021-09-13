@@ -1,4 +1,4 @@
-> _generated from: `./datasets/events-clients:1000-compression:100000.csv`_
+> _generated from: `datasets/events-clients:1000-compression:4320.csv`_
 
 ### Transactions sizes (bytes)
 
@@ -7,6 +7,10 @@
 ### Transactions amounts
 
 ![](./plots/amounts.svg)
+
+### Received vs Sent Payments
+
+![](./plots/received-vs-sent.svg)
 
 ### Number of recipients
 
