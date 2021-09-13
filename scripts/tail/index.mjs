@@ -19,7 +19,7 @@ const numberOfClients = parseInt(process.argv[2], 10);
 assert(typeof numberOfClients === 'number', 'Expected number of clients as 1st argument to be a number (e.g. 1000)');
 
 const compression = parseInt(process.argv[3], 10);
-assert(typeof compression === 'number' && compression > 1, 'Expected compression rate as 2nd argument to be a number (e.g. 10)');
+assert(typeof compression === 'number' && compression >= 1, 'Expected compression rate as 2nd argument to be a number (e.g. 10)');
 
 const maxSlot = parseInt(process.argv[4] || Number.MAX_SAFE_INTEGER, 10);
 assert(typeof maxSlot === 'number' && maxSlot > 1, 'Expected maxSlot rate as 3rd argument to be a number (e.g. 500)');
