@@ -5,27 +5,21 @@ import { spawn } from 'child_process';
 const CONCURRENCY = 16;
 const __dirname = path.resolve();
 
-const matrix =
-  [ { "window": 100, "delay": 600, "numberOfClients": 1000, "compression": 4320, "cutOff": 1.0, "proActive": 1.0 }
-  , { "window": 100, "delay": 600, "numberOfClients": 1000, "compression": 4320, "cutOff": 0.9, "proActive": 1.0 }
-  , { "window": 100, "delay": 600, "numberOfClients": 1000, "compression": 4320, "cutOff": 0.8, "proActive": 1.0 }
-  , { "window": 100, "delay": 600, "numberOfClients": 1000, "compression": 4320, "cutOff": 0.7, "proActive": 1.0 }
-  , { "window": 100, "delay": 600, "numberOfClients": 1000, "compression": 4320, "cutOff": 0.6, "proActive": 1.0 }
-  , { "window": 100, "delay": 600, "numberOfClients": 1000, "compression": 4320, "cutOff": 0.5, "proActive": 1.0 }
 
-  , { "window": 100, "delay": 600, "numberOfClients": 1000, "compression": 4320, "cutOff": 1.0, "proActive": 0.9 }
-  , { "window": 100, "delay": 600, "numberOfClients": 1000, "compression": 4320, "cutOff": 1.0, "proActive": 0.8 }
-  , { "window": 100, "delay": 600, "numberOfClients": 1000, "compression": 4320, "cutOff": 1.0, "proActive": 0.7 }
-  , { "window": 100, "delay": 600, "numberOfClients": 1000, "compression": 4320, "cutOff": 1.0, "proActive": 0.6 }
-  , { "window": 100, "delay": 600, "numberOfClients": 1000, "compression": 4320, "cutOff": 1.0, "proActive": 0.5 }
+const base = { "window": 100, "delay": 600, "numberOfClients": 5000, "compression": 3672 }
 
-  , { "window": 100, "delay": 900, "numberOfClients": 1000, "compression": 4320, "cutOff": 1.0, "proActive": 1.0 }
-  , { "window": 100, "delay": 800, "numberOfClients": 1000, "compression": 4320, "cutOff": 1.0, "proActive": 1.0 }
-  , { "window": 100, "delay": 700, "numberOfClients": 1000, "compression": 4320, "cutOff": 1.0, "proActive": 1.0 }
-  , { "window": 100, "delay": 500, "numberOfClients": 1000, "compression": 4320, "cutOff": 1.0, "proActive": 1.0 }
-  , { "window": 100, "delay": 400, "numberOfClients": 1000, "compression": 4320, "cutOff": 1.0, "proActive": 1.0 }
-  , { "window": 100, "delay": 300, "numberOfClients": 1000, "compression": 4320, "cutOff": 1.0, "proActive": 1.0 }
-  ]
+const clients = [ 1000, 2000, 5000, 10000 ]
+const cutOffs    = [ 1.0, 0.9, 0.8, 0.7, 0.6, 0.5 ];
+const proActives = [ 1.0, 0.9, 0.8, 0.7, 0.6, 0.5 ];
+
+const matrix = [];
+for (let h in clients) {
+  for (let i in cutOffs) {
+    for (let j in proActives) {
+      matrix.push({ ...base, numberOfClients: clients[h], cutOff: cutOffs[i], proActive: proActives[j] });
+    }
+  }
+}
 
 let cursor = 0;
 let pipeline = [];
