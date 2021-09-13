@@ -136,6 +136,8 @@ data RunOptions = RunOptions
   , -- | If and when to pro-actively snapshot as a client, e.g. 0.8 would
     -- snapshot when reaching 80% of the window budget.
     proactiveSnapshot :: Maybe Double
+  , -- | Fraction of the window budget which fixes the maximum admissible payment. 0.5 means that we discard any transaction which is bigger than half the payment window.
+    paymentCutOff :: Double
   , -- | Whether to print progress and additional information.
     verbosity :: Verbosity
   , -- | Options specific to the 'Server'
@@ -184,6 +186,7 @@ runOptionsParser =
     <*> optional paymentWindowOption
     <*> settlementDelayOption
     <*> optional proactiveSnapshotOption
+    <*> paymentCutOffOption
     <*> verbosityFlag
     <*> serverOptionsOption
 
@@ -224,6 +227,16 @@ proactiveSnapshotOption =
       <> metavar "FRAC"
       <> showDefault
       <> help "At which fraction of the payment window, a client does perform a snapshot pro-actively."
+
+paymentCutOffOption :: Parser Double
+paymentCutOffOption =
+  option auto $
+    mempty
+      <> long "payment-cut-off"
+      <> metavar "FRAC"
+      <> value 1.0
+      <> showDefault
+      <> help "Fraction of the window budget which fixes the maximum admissible payment. 0.5 means that we discard any transaction which is bigger than half the payment window."
 
 verbosityFlag :: Parser Verbosity
 verbosityFlag =

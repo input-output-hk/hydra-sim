@@ -233,7 +233,12 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
   -- filter them out of the simulation if any.
   trim = filter $ \case
     Event _ _ (NewTx tx) ->
-      maybe True (\w -> sent tx <= lovelace w) (opts ^. #paymentWindow)
+      let double = fromIntegral . unLovelace . lovelace
+          asLovelace = Lovelace . round
+       in maybe
+            True
+            (\w -> sent tx <= asLovelace (double w * (opts ^. #paymentCutOff)))
+            (opts ^. #paymentWindow)
     _ -> True
 
   tracer :: Tracer (IOSim a) TraceTailSimulation
