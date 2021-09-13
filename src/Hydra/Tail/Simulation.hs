@@ -248,6 +248,10 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
 data Analyze = Analyze
   { -- | Number of confirmed transactions within the timespan of the simulation
     numberOfConfirmedTransactions :: Int
+  , -- | Number of transactions that have been retried (counting only 1 if a transaction is retried multiple times)
+    numberOfRetriedTransactions :: Int
+  , -- | Total number of retries (at least as large as 'numberOfRetriedTransactions')
+    numberOfRetries :: Int
   , -- | Average time for a transaction to get 'confirmed'. This includes snapshotting when
     -- relevant.
     averageConfirmationTime :: Double
@@ -259,47 +263,62 @@ data Analyze = Analyze
   deriving (Generic, Show)
 
 type Transactions = Map (TxRef MockTx) [DiffTime]
+type Retries = Map (TxRef MockTx) Integer
 
 analyzeSimulation ::
   forall m.
   Monad m =>
   (SlotNo -> Maybe Analyze -> m ()) ->
   Trace () ->
-  m Transactions
+  m (Transactions, Retries)
 analyzeSimulation notify trace = do
-  (confirmations, _) <-
+  (confirmations, retries, _) <-
     let fn ::
           (ThreadLabel, Time, TraceTailSimulation) ->
-          (Map (TxRef MockTx) [DiffTime], SlotNo) ->
-          m (Map (TxRef MockTx) [DiffTime], SlotNo)
+          (Transactions, Retries, SlotNo) ->
+          m (Transactions, Retries, SlotNo)
         fn = \case
+          (_threadLabel, _, TraceServer (TraceTransactionBlocked ref)) ->
+            ( \(!m, !r, !sl) ->
+                let countRetry = \case
+                      Nothing -> Just 1
+                      Just n -> Just (n + 1)
+                 in pure
+                      ( m
+                      , Map.alter countRetry ref r
+                      , sl
+                      )
+            )
           (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId (AckTx ref)))) ->
-            ( \(!m, !sl) ->
+            ( \(!m, !r, !sl) ->
                 pure
                   ( Map.update (\ts -> Just (t : ts)) ref m
+                  , r
                   , sl
                   )
             )
           (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId (NewTx tx)))) ->
-            (\(!m, !sl) -> pure (Map.insert (txRef tx) [t] m, sl))
+            (\(!m, !r, !sl) -> pure (Map.insert (txRef tx) [t] m, r, sl))
           (_threadLabel, _time, TraceClient (TraceClientWakeUp sl')) ->
-            ( \(!m, !sl) ->
+            ( \(!m, !r, !sl) ->
                 if sl' > sl
                   then
                     if sl' /= 0 && unSlotNo sl' `mod` 60 == 0
-                      then notify sl' (Just $ mkAnalyze defaultAnalyzeOptions m) $> (m, sl')
-                      else notify sl' Nothing $> (m, sl')
-                  else pure (m, sl)
+                      then notify sl' (Just $ mkAnalyze defaultAnalyzeOptions m r) $> (m, r, sl')
+                      else notify sl' Nothing $> (m, r, sl')
+                  else pure (m, r, sl)
             )
           _ ->
             pure
-     in foldTraceEvents fn (mempty, -1) trace
-  pure confirmations
+     in foldTraceEvents fn (mempty, mempty, -1) trace
+  pure (confirmations, retries)
 
-mkAnalyze :: AnalyzeOptions -> Transactions -> Analyze
-mkAnalyze AnalyzeOptions{discardEdges} txs =
+mkAnalyze :: AnalyzeOptions -> Transactions -> Retries -> Analyze
+mkAnalyze AnalyzeOptions{discardEdges} txs retries =
   Analyze
     { numberOfConfirmedTransactions
+    , numberOfRetriedTransactions
+    , numberOfRetries
     , averageConfirmationTime
     , percentConfirmedWithin10Slots
     , percentConfirmedWithin1Slot
@@ -307,6 +326,10 @@ mkAnalyze AnalyzeOptions{discardEdges} txs =
     }
  where
   numberOfConfirmedTransactions = length confirmationTimes
+
+  numberOfRetriedTransactions = Map.size retries
+
+  numberOfRetries = fromIntegral $ Map.foldr (+) 0 retries
 
   confirmationTimes =
     mapMaybe (convertConfirmationTime . snd) . maybeDiscardEdges $ Map.toList txs
@@ -483,6 +506,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
             clients
       if not (null blocked)
         then do
+          traceWith tracer (TraceTransactionBlocked (txId tx))
           withTMVar_ registry $
             execStateT $ do
               forM_ (zip [0 ..] (Map.elems blocked)) $ \case
@@ -670,6 +694,7 @@ inProactiveSnapshotLimit RunOptions{paymentWindow, proactiveSnapshot} Balance{in
 
 data TraceServer
   = TraceServerMultiplexer (TraceMultiplexer Msg)
+  | TraceTransactionBlocked (TxRef MockTx)
   deriving (Show)
 
 data ServerMain = ServerMain deriving (Show)
@@ -1039,8 +1064,18 @@ writeTransactions filepath transactions = do
   toCsv _ =
     Nothing
 
-  replaceCommas :: Text -> Text
-  replaceCommas = T.map (\c -> if c == ',' then ';' else c)
+writeRetries :: FilePath -> Retries -> IO ()
+writeRetries filepath retries = do
+  TIO.writeFile filepath $
+    T.unlines $
+      "slot,ref,retries" : fmap toCsv (Map.toList retries)
+ where
+  toCsv :: (TxRef MockTx, Integer) -> Text
+  toCsv (TxRef{slot, ref}, n) =
+    tshow slot <> "," <> replaceCommas ref <> "," <> tshow n
+
+replaceCommas :: Text -> Text
+replaceCommas = T.map (\c -> if c == ',' then ';' else c)
 
 readTransactionsThrow :: FilePath -> IO Transactions
 readTransactionsThrow filepath = do
@@ -1060,6 +1095,20 @@ readTransactionsThrow filepath = do
     case readMay (T.unpack t) of
       Nothing -> throwIO $ CouldntParseCsv filepath $ "when parsing confirmation time: " <> t
       Just secs -> pure [realToFrac (secs :: Double), 0]
+
+readRetriesThrow :: FilePath -> IO Retries
+readRetriesThrow filepath = do
+  text <- TIO.readFile filepath
+  fmap fold . mapM fromCsv $ drop 1 . T.lines $ text
+ where
+  fromCsv line =
+    case T.splitOn "," line of
+      [slot, ref, retry] -> do
+        i <- readIO $ T.unpack slot
+        n <- readIO $ T.unpack retry
+        pure $ Map.singleton (TxRef i ref) n
+      _ ->
+        throwIO $ CouldntParseCsv filepath $ "invalid line: " <> line
 
 tshow :: Show a => a -> Text
 tshow = T.pack . show

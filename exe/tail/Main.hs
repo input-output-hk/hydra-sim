@@ -8,10 +8,12 @@ import Hydra.Tail.Simulation (
   mkAnalyze,
   prepareSimulation,
   readEventsThrow,
+  readRetriesThrow,
   readTransactionsThrow,
   runSimulation,
   summarizeEvents,
   writeEvents,
+  writeRetries,
   writeTransactions,
  )
 import Hydra.Tail.Simulation.Options (
@@ -41,20 +43,25 @@ main = do
       pPrint summary
 
       let trace = runSimulation options events
-      txs <- withProgressReport (lastSlot summary) options $ \reportProgress ->
+      (txs, retries) <- withProgressReport (lastSlot summary) options $ \reportProgress ->
         analyzeSimulation reportProgress trace
-      pPrint $ mkAnalyze defaultAnalyzeOptions txs
+      pPrint $ mkAnalyze defaultAnalyzeOptions txs retries
 
-      let res = resultName options summary
-      putStrLn $ "Writing confirmation times into: " <> res
-      writeTransactions res txs
+      let resTxs = resultName options "txs" summary
+      putStrLn $ "Writing confirmation times into: " <> resTxs
+      writeTransactions resTxs txs
+
+      let resRet = resultName options "retries" summary
+      putStrLn $ "Writing retries counts into: " <> resRet
+      writeRetries resRet retries
     Analyze options filepath -> do
       txs <- readTransactionsThrow filepath
-      pPrint $ mkAnalyze options txs
+      retries <- readRetriesThrow filepath
+      pPrint $ mkAnalyze options txs retries
 
-resultName :: RunOptions -> SimulationSummary -> String
-resultName options summary =
-  "txs"
+resultName :: RunOptions -> String -> SimulationSummary -> String
+resultName options prefix summary =
+  prefix
     <> clients
     <> slots
     <> settlement
