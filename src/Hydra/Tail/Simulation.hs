@@ -566,7 +566,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
                       pure $ Just (st, balance, msg : mailbox, pending)
     (clientId, AckTx ref) -> do
       let ackTx = \case
-            Nothing -> error "Acked unknown transaction?"
+            Nothing -> (Nothing, Nothing)
             Just (tx, sender, clients) ->
               let clients' = delete clientId clients
                in if null clients' then (Just (tx, sender), Nothing) else (Nothing, Just (tx, sender, clients'))
