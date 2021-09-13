@@ -145,14 +145,19 @@ async function receivedVsSent(events) {
 
 async function amounts(events) {
   const bounds =
-    [ [0, 1]
-    , [1, 10]
-    , [10, 100]
-    , [100, 1000]
-    , [1000, 10000]
-    , [10000, 100000]
-    , [100000, 1000000]
-    , [1000000, Number.POSITIVE_INFINITY]
+    [ [0,    1]
+    , [1,   10]
+    , [10,  20]
+    , [20,  30]
+    , [30,  40]
+    , [40,  50]
+    , [50,  60]
+    , [60,  70]
+    , [70,  80]
+    , [80,  90]
+    , [90, 100]
+    , [100, 200]
+    , [200, Number.POSITIVE_INFINITY]
     ];
 
   const labels = bounds.map(([inf, sup]) => sup >= Number.POSITIVE_INFINITY
