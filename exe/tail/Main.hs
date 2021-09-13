@@ -43,9 +43,9 @@ main = do
       pPrint summary
 
       let trace = runSimulation options events
-      (txs, retries) <- withProgressReport (lastSlot summary) options $ \reportProgress ->
+      (txs, retries, snapshots) <- withProgressReport (lastSlot summary) options $ \reportProgress ->
         analyzeSimulation reportProgress trace
-      pPrint $ mkAnalyze defaultAnalyzeOptions txs retries
+      pPrint $ mkAnalyze defaultAnalyzeOptions txs retries snapshots
 
       let resTxs = resultName options "txs" summary
       putStrLn $ "Writing confirmation times into: " <> resTxs
@@ -57,7 +57,8 @@ main = do
     Analyze options filepath -> do
       txs <- readTransactionsThrow filepath
       retries <- readRetriesThrow filepath
-      pPrint $ mkAnalyze options txs retries
+      let snapshots = 0 -- FIXME: Get from options or read from file.
+      pPrint $ mkAnalyze options txs retries snapshots
 
 resultName :: RunOptions -> String -> SimulationSummary -> String
 resultName options prefix summary =
