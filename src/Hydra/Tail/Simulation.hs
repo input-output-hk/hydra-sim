@@ -251,12 +251,12 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
   trServer = contramap TraceServer tracer
 
 data Analyze = Analyze
-  { -- | Number of confirmed transactions within the timespan of the simulation
+  { numberOfSubmittedTransactions :: Int
+  , -- | Number of confirmed transactions within the timespan of the simulation
     numberOfConfirmedTransactions :: Int
   , -- | Number of transactions that have been retried (counting only 1 if a transaction is retried multiple times)
     numberOfRetriedTransactions :: Int
-  , -- | Total number of retries (at least as large as 'numberOfRetriedTransactions')
-    numberOfRetries :: Int
+  , numberOfRetriedConfirmedTransactions :: Int
   , -- | Total number of snapshots across ALL clients
     numberOfSnapshots :: Int
   , -- | Average time for a transaction to get 'confirmed'. This includes snapshotting when
@@ -272,24 +272,27 @@ data Analyze = Analyze
 type Transactions = Map (TxRef MockTx) [DiffTime]
 type Retries = Map (TxRef MockTx) Integer
 type NumberOfSnapshots = Int
+type NumberOfSubmittedTransactions = Int
 
 analyzeSimulation ::
   forall m.
   Monad m =>
   (SlotNo -> Maybe Analyze -> m ()) ->
   Trace () ->
-  m (Transactions, Retries, NumberOfSnapshots)
+  m (Transactions, Retries, NumberOfSnapshots, NumberOfSubmittedTransactions)
 analyzeSimulation notify trace = do
-  (confirmations, retries, snapshots, _) <-
+  (confirmations, retries, snapshots, submittedTxs, _) <-
     let fn ::
           (ThreadLabel, Time, TraceTailSimulation) ->
-          (Transactions, Retries, NumberOfSnapshots, SlotNo) ->
-          m (Transactions, Retries, NumberOfSnapshots, SlotNo)
+          (Transactions, Retries, NumberOfSnapshots, NumberOfSubmittedTransactions, SlotNo) ->
+          m (Transactions, Retries, NumberOfSnapshots, NumberOfSubmittedTransactions, SlotNo)
         fn = \case
+          (_threadLabel, _, TraceServer (TraceServerMultiplexer (MPRecvTrailing _nodeId NewTx{}))) ->
+            (\(!m, !r, !n, !rt, !sl) -> pure (m, r, n, rt + 1, sl))
           (_threadLabel, _, TraceServer (TraceServerMultiplexer (MPRecvTrailing _nodeId SnapshotDone))) ->
-            (\(!m, !r, !n, !sl) -> pure (m, r, n + 1, sl))
+            (\(!m, !r, !n, !rt, !sl) -> pure (m, r, n + 1, rt, sl))
           (_threadLabel, _, TraceServer (TraceTransactionBlocked ref)) ->
-            ( \(!m, !r, !n, !sl) ->
+            ( \(!m, !r, !n, !rt, !sl) ->
                 let countRetry = \case
                       Nothing -> Just 1
                       Just n -> Just (n + 1)
@@ -297,40 +300,43 @@ analyzeSimulation notify trace = do
                       ( m
                       , Map.alter countRetry ref r
                       , n
+                      , rt
                       , sl
                       )
             )
           (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId (AckTx ref)))) ->
-            ( \(!m, !r, !n, !sl) ->
+            ( \(!m, !r, !n, !rt, !sl) ->
                 pure
                   ( Map.update (\ts -> Just (t : ts)) ref m
                   , r
                   , n
+                  , rt
                   , sl
                   )
             )
           (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId (NewTx tx)))) ->
-            (\(!m, !r, !n, !sl) -> pure (Map.insert (txRef tx) [t] m, r, n, sl))
+            (\(!m, !r, !n, !rt, !sl) -> pure (Map.insert (txRef tx) [t] m, r, n, rt, sl))
           (_threadLabel, _time, TraceClient (TraceClientWakeUp sl')) ->
-            ( \(!m, !r, !n, !sl) ->
+            ( \(!m, !r, !n, !rt, !sl) ->
                 if sl' > sl
                   then
                     if sl' /= 0 && unSlotNo sl' `mod` 60 == 0
-                      then notify sl' (Just $ mkAnalyze defaultAnalyzeOptions m r n) $> (m, r, n, sl')
-                      else notify sl' Nothing $> (m, r, n, sl')
-                  else pure (m, r, n, sl)
+                      then notify sl' (Just $ mkAnalyze defaultAnalyzeOptions m r n rt) $> (m, r, n, rt, sl')
+                      else notify sl' Nothing $> (m, r, n, rt, sl')
+                  else pure (m, r, n, rt, sl)
             )
           _ ->
             pure
-     in foldTraceEvents fn (mempty, mempty, 0, -1) trace
-  pure (confirmations, retries, snapshots)
+     in foldTraceEvents fn (mempty, mempty, 0, 0, -1) trace
+  pure (confirmations, retries, snapshots, submittedTxs)
 
-mkAnalyze :: AnalyzeOptions -> Transactions -> Retries -> NumberOfSnapshots -> Analyze
-mkAnalyze AnalyzeOptions{discardEdges} txs retries numberOfSnapshots =
+mkAnalyze :: AnalyzeOptions -> Transactions -> Retries -> NumberOfSnapshots -> NumberOfSubmittedTransactions -> Analyze
+mkAnalyze AnalyzeOptions{discardEdges} txs retries numberOfSnapshots numberOfSubmittedTransactions =
   Analyze
     { numberOfConfirmedTransactions
+    , numberOfSubmittedTransactions
     , numberOfRetriedTransactions
-    , numberOfRetries
+    , numberOfRetriedConfirmedTransactions
     , numberOfSnapshots
     , averageConfirmationTime
     , percentConfirmedWithin10Slots
@@ -342,7 +348,7 @@ mkAnalyze AnalyzeOptions{discardEdges} txs retries numberOfSnapshots =
 
   numberOfRetriedTransactions = Map.size retries
 
-  numberOfRetries = fromIntegral $ Map.foldr (+) 0 retries
+  numberOfRetriedConfirmedTransactions = Map.size (retries `Map.restrictKeys` Map.keysSet (Map.filter ((== 2) . length) txs))
 
   confirmationTimes =
     mapMaybe (convertConfirmationTime . snd) . maybeDiscardEdges $ Map.toList txs
