@@ -8,9 +8,9 @@ const __dirname = path.resolve();
 
 const base = { "window": 100, "delay": 600, "numberOfClients": 5000, "compression": 3672 }
 
-const clients = [ 1000, 2000, 5000, 10000 ]
-const cutOffs    = [ 1.0, 0.9, 0.8, 0.7, 0.6, 0.5 ];
-const proActives = [ 1.0, 0.9, 0.8, 0.7, 0.6, 0.5 ];
+const clients = [ 2000 ]
+const cutOffs    = [ 1.0, 0.8, 0.5 ];
+const proActives = [ 0.8, 0.6 ];
 
 const matrix = [];
 for (let h in clients) {
