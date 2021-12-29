@@ -278,7 +278,7 @@ data Server m = Server
   { multiplexer :: Multiplexer m Msg
   , identifier :: ServerId
   , region :: AWSCenters
-  , registry :: TMVar m (Map ClientId (ClientState, Balance, [Msg], [Msg]))
+  , registry :: TMVar m (Map ClientId (ClientState, Balance, [Msg]))
   , transactions :: TVar m (Map (TxRef MockTx) (MockTx, ClientId, [ClientId]))
   }
   deriving (Generic)
@@ -309,7 +309,7 @@ newServer identifier clientIds ServerOptions{region, writeCapacity, readCapacity
   -- be _negative_ as part of the simulation.
   clients =
     Map.fromList
-      [ (clientId, (Online, initialBalance 0, mempty, mempty))
+      [ (clientId, (Online, initialBalance 0, mempty))
       | clientId <- clientIds
       ]
 
@@ -348,18 +348,19 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
                 (ix, (client, Just NeedSnapshot)) -> do
                   lift $ sendTo multiplexer client NeedSnapshot
                   modifyM $
-                    updateF client $ \(_st, balance, mailbox, pending) -> do
-                      -- NOTE: This enqueues the message for one (and only one) of the
-                      -- participants. A transaction shall be marked as pending if one of the
-                      -- participants (sender or recipients) are blocked (require snapshots)
-                      -- until both clients need to have performed their snapshot.
+                    updateF client $ \(_st, balance, pending) -> do
+                      -- NOTE: This enqueues the message for one (and only one) of the participants.
+                      --
+                      -- A transaction shall be marked as pending if one of the
+                      -- participants (sender or recipients) is blocked (doing snapshot).
+                      --
                       -- There's no "ledger" on the server, so if we re-enqueue a transaction
-                      -- per blocked participant, we'll may replay the transaction more than once!
+                      -- for each blocked participant, we may replay the transaction more than once!
                       --
                       -- Thus, it is sufficient (and necessary) to re-enqueue the transaction only
                       -- once, for one of the participant. Once that participant is done
-                      -- snapshotting, it'll retry the transaction and from here we really have
-                      -- two scenarios:
+                      -- snapshotting, the transaction will eventually be retried and from here we
+                      -- really have two scenarios:
                       --
                       -- a) That client happened to be the last one in the transaction which had
                       --    to snapshot, and the transaction can now proceed.
@@ -370,22 +371,13 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
                       --
                       -- Eventually, once all clients are done, it goes through.
                       let pending' = if ix == (0 :: Int) then NewTx tx : pending else pending
-                      pure $ Just (DoingSnapshot, balance, mailbox, pending')
+                      pure $ Just (DoingSnapshot, balance, pending')
                 _ -> do
                   pure () -- Already blocked, and snapshot already requested.
         else do
-          withTMVar_ registry $
-            execStateT $ do
-              lift $ atomically $ modifyTVar' transactions $ Map.insert (txRef tx) (tx, clientId, txRecipients tx)
-              forM_ (txRecipients tx) $ \recipient -> do
-                modifyM $
-                  updateF recipient $ \case
-                    (Online, balance, mailbox, pending) -> do
-                      sendTo multiplexer recipient (NotifyTx tx)
-                      pure $ Just (Online, balance, mailbox, pending)
-                    (st, balance, mailbox, pending) -> do
-                      let msg = NotifyTx tx
-                      pure $ Just (st, balance, msg : mailbox, pending)
+          atomically $ modifyTVar' transactions $ Map.insert (txRef tx) (tx, clientId, txRecipients tx)
+          forM_ (txRecipients tx) $ \recipient -> do
+            sendTo multiplexer recipient (NotifyTx tx)
     (clientId, AckTx ref) -> do
       let ackTx = \case
             Nothing -> (Nothing, Nothing)
@@ -404,41 +396,33 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
             execStateT $ do
               forM_ (txRecipients tx) $ \recipient -> do
                 modifyM $
-                  updateF recipient $ \(st, balance, mailbox, pending) -> do
+                  updateF recipient $ \(st, balance, pending) -> do
                     let balance' = modifyCurrent (+ received tx) balance
-                    pure $ Just (st, balance', mailbox, pending)
+                    pure $ Just (st, balance', pending)
               modifyM $
-                updateF sender $ \(st, balance, mailbox, pending) -> do
+                updateF sender $ \(st, balance, pending) -> do
                   let balance' = modifyCurrent (\x -> x - sent tx) balance
 
                   -- Check whether we should send 'NeedSnapshot' for pro-active
                   -- snapshotting (after the tx). Logically this would be done on the
                   -- client-side but we have the payment window 'registry' only on the
                   -- server for now.
-                  (st', mailbox') <- case st of
-                    Online -> do
-                      sendTo multiplexer sender (AckTx $ txRef tx)
-                      if inProactiveSnapshotLimit options balance'
-                        then do
-                          sendTo multiplexer clientId NeedSnapshot
-                          pure (DoingSnapshot, mailbox)
-                        else do
-                          pure (st, mailbox)
-                    _ -> do
-                      let ack = AckTx (txRef tx)
-                      if inProactiveSnapshotLimit options balance'
-                        then do
-                          pure (DoingSnapshot, NeedSnapshot : ack : mailbox)
-                        else do
-                          pure (st, ack : mailbox)
+                  st' <- do
+                    sendTo multiplexer sender (AckTx $ txRef tx)
+                    if inProactiveSnapshotLimit options balance'
+                      then do
+                        sendTo multiplexer clientId NeedSnapshot
+                        pure DoingSnapshot
+                      else do
+                        pure st
 
-                  pure $ Just (st', balance', mailbox', pending)
+                  pure $ Just (st', balance', pending)
     (clientId, SnapshotDone) -> do
       pending <- withTMVar registry $ \clients -> do
         case Map.lookup clientId clients of
           Nothing -> pure ([], clients)
-          Just (_st, Balance{current}, mailbox, pending) -> do
-            let clients' = Map.insert clientId (Online, initialBalance current, mailbox, []) clients
+          Just (_st, Balance{current}, pending) -> do
+            let clients' = Map.insert clientId (Online, initialBalance current, []) clients
             pure (pending, clients')
       mapM_ handleMessage (reverse $ (clientId,) <$> pending)
     (clientId, msg) ->
@@ -456,11 +440,11 @@ matchDoingSnapshot ::
   Maybe Ada ->
   (ClientId, MockTx) ->
   ClientId ->
-  (ClientState, Balance, mailbox, pending) ->
+  (ClientState, Balance, pending) ->
   f (Maybe (ClientId, Maybe Msg))
 matchDoingSnapshot Nothing _ _ _ =
   pure Nothing
-matchDoingSnapshot (Just paymentWindow) (sender, tx) clientId (st, balance, _, _)
+matchDoingSnapshot (Just paymentWindow) (sender, tx) clientId (st, balance, _)
   | clientId `elem` txRecipients tx =
     case (st, viewPaymentWindow (lovelace paymentWindow) balance (received tx)) of
       (DoingSnapshot, _) ->
