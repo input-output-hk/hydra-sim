@@ -4,14 +4,18 @@ import Prelude
 
 import Hydra.Tail.Simulation (
   SimulationSummary (..),
+  prepareSimulation,
+  runSimulation,
+  summarizeEvents,
+ )
+import Hydra.Tail.Simulation.Analyze (
   analyzeSimulation,
   mkAnalyze,
-  prepareSimulation,
+ )
+import Hydra.Tail.Simulation.Csv (
   readEventsThrow,
   readRetriesThrow,
   readTransactionsThrow,
-  runSimulation,
-  summarizeEvents,
   writeEvents,
   writeRetries,
   writeTransactions,
@@ -44,7 +48,7 @@ main = do
 
       let trace = runSimulation options events
       (txs, retries, snapshots, submittedTxs) <- withProgressReport (lastSlot summary) options $ \reportProgress ->
-        analyzeSimulation reportProgress trace
+        analyzeSimulation defaultAnalyzeOptions reportProgress trace
       pPrint $ mkAnalyze defaultAnalyzeOptions txs retries snapshots submittedTxs
 
       let resTxs = resultName options "txs" summary

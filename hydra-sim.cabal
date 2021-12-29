@@ -90,6 +90,8 @@ library
     HydraSim.Types
 
     Hydra.Tail.Simulation
+    Hydra.Tail.Simulation.Analyze
+    Hydra.Tail.Simulation.Csv
     Hydra.Tail.Simulation.Options
     Hydra.Tail.Simulation.Utils
     Hydra.Tail.Simulation.MockTx

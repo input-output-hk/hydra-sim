@@ -16,7 +16,6 @@ import Control.Monad (
   forM_,
   forever,
   join,
-  liftM5,
   void,
  )
 import Control.Monad.Class.MonadAsync (
@@ -45,7 +44,6 @@ import Control.Monad.Class.MonadThrow (
  )
 import Control.Monad.Class.MonadTime (
   MonadTime,
-  Time (..),
  )
 import Control.Monad.Class.MonadTimer (
   MonadTimer,
@@ -53,7 +51,6 @@ import Control.Monad.Class.MonadTimer (
  )
 import Control.Monad.IOSim (
   IOSim,
-  ThreadLabel,
   Trace (..),
   runSimTrace,
  )
@@ -72,18 +69,10 @@ import Control.Tracer (
   contramap,
   traceWith,
  )
-import Data.Foldable (
-  fold,
- )
-import Data.Functor (
-  ($>),
- )
 import Data.Generics.Internal.VL.Lens (
   (^.),
  )
-import Data.Generics.Labels (
-
- )
+import Data.Generics.Labels ()
 import Data.List (
   delete,
   foldl',
@@ -93,18 +82,10 @@ import Data.Map.Strict (
   Map,
  )
 import qualified Data.Map.Strict as Map
-import Data.Maybe (
-  mapMaybe,
- )
 import Data.Ratio (
   (%),
  )
 import qualified Data.Set as Set
-import Data.Text (
-  Text,
- )
-import qualified Data.Text as T
-import qualified Data.Text.IO as TIO
 import Data.Time.Clock (
   DiffTime,
   picosecondsToDiffTime,
@@ -115,19 +96,16 @@ import GHC.Generics (
  )
 import Hydra.Tail.Simulation.MockTx (
   MockTx (..),
-  TxRef (..),
   mockTx,
   received,
   sent,
  )
 import Hydra.Tail.Simulation.Options (
-  AnalyzeOptions (..),
   ClientOptions (..),
   NetworkCapacity (..),
   PrepareOptions (..),
   RunOptions (..),
   ServerOptions (..),
-  defaultAnalyzeOptions,
   kbitsPerSecond,
  )
 import Hydra.Tail.Simulation.PaymentWindow (
@@ -145,16 +123,12 @@ import Hydra.Tail.Simulation.SlotNo (
   SlotNo (..),
  )
 import Hydra.Tail.Simulation.Utils (
-  foldTraceEvents,
   frequency,
   modifyM,
   updateF,
   withLabel,
   withTMVar,
   withTMVar_,
- )
-import HydraSim.Analyse (
-  diffTimeToSeconds,
  )
 import HydraSim.DelayedComp (
   DelayedComp,
@@ -185,9 +159,6 @@ import HydraSim.Tx.Class (
  )
 import HydraSim.Types (
   NodeId (..),
- )
-import Safe (
-  readMay,
  )
 import System.Random (
   StdGen,
@@ -249,135 +220,6 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
 
   trServer :: Tracer (IOSim a) TraceServer
   trServer = contramap TraceServer tracer
-
-data Analyze = Analyze
-  { numberOfSubmittedTransactions :: Int
-  , -- | Number of confirmed transactions within the timespan of the simulation
-    numberOfConfirmedTransactions :: Int
-  , -- | Number of transactions that have been retried (counting only 1 if a transaction is retried multiple times)
-    numberOfRetriedTransactions :: Int
-  , numberOfRetriedConfirmedTransactions :: Int
-  , -- | Total number of snapshots across ALL clients
-    numberOfSnapshots :: Int
-  , -- | Average time for a transaction to get 'confirmed'. This includes snapshotting when
-    -- relevant.
-    averageConfirmationTime :: Double
-  , -- | How many confirmed transactions had been confirmed within one slot, 10 slots and one tenth of a slots
-    percentConfirmedWithin1Slot :: Double
-  , percentConfirmedWithin10Slots :: Double
-  , percentConfirmedWithinTenthOfSlot :: Double
-  }
-  deriving (Generic, Show)
-
-type Transactions = Map (TxRef MockTx) [DiffTime]
-type Retries = Map (TxRef MockTx) Integer
-type NumberOfSnapshots = Int
-type NumberOfSubmittedTransactions = Int
-
-analyzeSimulation ::
-  forall m.
-  Monad m =>
-  (SlotNo -> Maybe Analyze -> m ()) ->
-  Trace () ->
-  m (Transactions, Retries, NumberOfSnapshots, NumberOfSubmittedTransactions)
-analyzeSimulation notify trace = do
-  (confirmations, retries, snapshots, submittedTxs, _) <-
-    let fn ::
-          (ThreadLabel, Time, TraceTailSimulation) ->
-          (Transactions, Retries, NumberOfSnapshots, NumberOfSubmittedTransactions, SlotNo) ->
-          m (Transactions, Retries, NumberOfSnapshots, NumberOfSubmittedTransactions, SlotNo)
-        fn = \case
-          (_threadLabel, _, TraceServer (TraceServerMultiplexer (MPRecvTrailing _nodeId NewTx{}))) ->
-            (\(!m, !r, !n, !rt, !sl) -> pure (m, r, n, rt + 1, sl))
-          (_threadLabel, _, TraceServer (TraceServerMultiplexer (MPRecvTrailing _nodeId SnapshotDone))) ->
-            (\(!m, !r, !n, !rt, !sl) -> pure (m, r, n + 1, rt, sl))
-          (_threadLabel, _, TraceServer (TraceTransactionBlocked ref)) ->
-            ( \(!m, !r, !n, !rt, !sl) ->
-                let countRetry = \case
-                      Nothing -> Just 1
-                      Just n -> Just (n + 1)
-                 in pure
-                      ( m
-                      , Map.alter countRetry ref r
-                      , n
-                      , rt
-                      , sl
-                      )
-            )
-          (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId (AckTx ref)))) ->
-            ( \(!m, !r, !n, !rt, !sl) ->
-                pure
-                  ( Map.update (\ts -> Just (t : ts)) ref m
-                  , r
-                  , n
-                  , rt
-                  , sl
-                  )
-            )
-          (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId (NewTx tx)))) ->
-            (\(!m, !r, !n, !rt, !sl) -> pure (Map.insert (txRef tx) [t] m, r, n, rt, sl))
-          (_threadLabel, _time, TraceClient (TraceClientWakeUp sl')) ->
-            ( \(!m, !r, !n, !rt, !sl) ->
-                if sl' > sl
-                  then
-                    if sl' /= 0 && unSlotNo sl' `mod` 60 == 0
-                      then notify sl' (Just $ mkAnalyze defaultAnalyzeOptions m r n rt) $> (m, r, n, rt, sl')
-                      else notify sl' Nothing $> (m, r, n, rt, sl')
-                  else pure (m, r, n, rt, sl)
-            )
-          _ ->
-            pure
-     in foldTraceEvents fn (mempty, mempty, 0, 0, -1) trace
-  pure (confirmations, retries, snapshots, submittedTxs)
-
-mkAnalyze :: AnalyzeOptions -> Transactions -> Retries -> NumberOfSnapshots -> NumberOfSubmittedTransactions -> Analyze
-mkAnalyze AnalyzeOptions{discardEdges} txs retries numberOfSnapshots numberOfSubmittedTransactions =
-  Analyze
-    { numberOfConfirmedTransactions
-    , numberOfSubmittedTransactions
-    , numberOfRetriedTransactions
-    , numberOfRetriedConfirmedTransactions
-    , numberOfSnapshots
-    , averageConfirmationTime
-    , percentConfirmedWithin10Slots
-    , percentConfirmedWithin1Slot
-    , percentConfirmedWithinTenthOfSlot
-    }
- where
-  numberOfConfirmedTransactions = length confirmationTimes
-
-  numberOfRetriedTransactions = Map.size retries
-
-  numberOfRetriedConfirmedTransactions = Map.size (retries `Map.restrictKeys` Map.keysSet (Map.filter ((== 2) . length) txs))
-
-  confirmationTimes =
-    mapMaybe (convertConfirmationTime . snd) . maybeDiscardEdges $ Map.toList txs
-
-  maybeDiscardEdges xs = case discardEdges of
-    Nothing -> xs
-    Just n -> filter (\(TxRef{slot}, _) -> slot > n && slot < (maxSlot - n)) xs
-
-  maxSlot = maximum $ map (\TxRef{slot} -> slot) $ Map.keys txs
-
-  convertConfirmationTime = \case
-    [end, start] -> Just . diffTimeToSeconds $ end - start
-    _ -> Nothing
-
-  averageConfirmationTime =
-    totalConfirmationTime / fromIntegral numberOfConfirmedTransactions
-
-  totalConfirmationTime = sum confirmationTimes
-
-  percentConfirmedWithin1Slot =
-    length (filter (< 1) confirmationTimes) `percentOf` numberOfConfirmedTransactions
-
-  percentConfirmedWithin10Slots =
-    length (filter (< 10) confirmationTimes) `percentOf` numberOfConfirmedTransactions
-
-  percentConfirmedWithinTenthOfSlot =
-    length (filter (< 0.1) confirmationTimes) `percentOf` numberOfConfirmedTransactions
-
-  percentOf a b = (fromIntegral a :: Double) / fromIntegral b
 
 --
 -- (Simplified) Tail-Protocol
@@ -934,143 +776,6 @@ durationOf RunOptions{slotLength, settlementDelay} events =
 getNumberOfClients :: [Event] -> Integer
 getNumberOfClients =
   toInteger . getNodeId . from . maximumBy (\a b -> getNodeId (from a) `compare` getNodeId (from b))
-
-data CouldntParseCsv = CouldntParseCsv FilePath Text
-  deriving (Show)
-instance Exception CouldntParseCsv
-
-writeEvents :: FilePath -> [Event] -> IO ()
-writeEvents filepath events = do
-  TIO.writeFile filepath $
-    T.unlines $
-      "slot,clientId,event,size,amount,recipients" :
-      (eventToCsv <$> events)
-
-readEventsThrow :: FilePath -> IO [Event]
-readEventsThrow filepath = do
-  text <- TIO.readFile filepath
-  case traverse eventFromCsv . drop 1 . T.lines $ text of
-    Nothing -> throwIO $ CouldntParseCsv filepath ""
-    Just events -> pure events
-
-eventToCsv :: Event -> Text
-eventToCsv = \case
-  -- slot,clientId,new-tx,size,amount,recipients
-  Event (SlotNo sl) (NodeId cl) (NewTx (MockTx _ (Size sz) (Lovelace am) rs)) ->
-    T.intercalate
-      ","
-      [ T.pack (show sl)
-      , T.pack (show cl)
-      , "new-tx"
-      , T.pack (show sz)
-      , T.pack (show am)
-      , T.intercalate " " (T.pack . show . getNodeId <$> rs)
-      ]
-  e ->
-    error $ "eventToCsv: invalid event to serialize: " <> show e
-
-eventFromCsv :: Text -> Maybe Event
-eventFromCsv line =
-  case T.splitOn "," line of
-    -- slot,clientId,new-tx,size,amount,recipients
-    [sl, cl, "new-tx", sz, am, rs] ->
-      Event
-        <$> readSlotNo sl
-        <*> readClientId cl
-        <*> ( NewTx
-                <$> liftM5
-                  mockTx
-                  (readClientId cl)
-                  (readSlotNo sl)
-                  (readAmount am)
-                  (readSize sz)
-                  (readRecipients rs)
-            )
-    _ ->
-      Nothing
- where
-  readClientId :: Text -> Maybe ClientId
-  readClientId =
-    fmap NodeId . readMay . T.unpack
-
-  readSlotNo :: Text -> Maybe SlotNo
-  readSlotNo =
-    fmap SlotNo . readMay . T.unpack
-
-  readAmount :: Text -> Maybe Lovelace
-  readAmount =
-    readMay . T.unpack
-
-  readSize :: Text -> Maybe Size
-  readSize =
-    fmap Size . readMay . T.unpack
-
-  readRecipients :: Text -> Maybe [ClientId]
-  readRecipients = \case
-    "" -> Just []
-    ssv -> traverse readClientId (T.splitOn " " ssv)
-
-writeTransactions :: FilePath -> Transactions -> IO ()
-writeTransactions filepath transactions = do
-  TIO.writeFile filepath $
-    T.unlines $
-      "slot,ref,confirmationTime" :
-      mapMaybe toCsv (Map.toList transactions)
- where
-  toCsv :: (TxRef MockTx, [DiffTime]) -> Maybe Text
-  toCsv (TxRef{slot, ref}, [end, start]) =
-    Just $ tshow slot <> "," <> replaceCommas ref <> "," <> tshow (diffTimeToSeconds (end - start))
-  toCsv _ =
-    Nothing
-
-writeRetries :: FilePath -> Retries -> IO ()
-writeRetries filepath retries = do
-  TIO.writeFile filepath $
-    T.unlines $
-      "slot,ref,retries" : fmap toCsv (Map.toList retries)
- where
-  toCsv :: (TxRef MockTx, Integer) -> Text
-  toCsv (TxRef{slot, ref}, n) =
-    tshow slot <> "," <> replaceCommas ref <> "," <> tshow n
-
-replaceCommas :: Text -> Text
-replaceCommas = T.map (\c -> if c == ',' then ';' else c)
-
-readTransactionsThrow :: FilePath -> IO Transactions
-readTransactionsThrow filepath = do
-  text <- TIO.readFile filepath
-  fmap fold . mapM fromCsv $ drop 1 . T.lines $ text
- where
-  fromCsv line =
-    case T.splitOn "," line of
-      [slot, ref, ct] -> do
-        i <- readIO $ T.unpack slot
-        Map.singleton (TxRef i ref) <$> readConfirmationTimeAsInterval ct
-      _ ->
-        throwIO $ CouldntParseCsv filepath $ "invalid line: " <> line
-
-  readConfirmationTimeAsInterval t = do
-    -- REVIEW(SN): Uses 'NominalDiffTime' for reading, why not everything?
-    case readMay (T.unpack t) of
-      Nothing -> throwIO $ CouldntParseCsv filepath $ "when parsing confirmation time: " <> t
-      Just secs -> pure [realToFrac (secs :: Double), 0]
-
-readRetriesThrow :: FilePath -> IO Retries
-readRetriesThrow filepath = do
-  text <- TIO.readFile filepath
-  fmap fold . mapM fromCsv $ drop 1 . T.lines $ text
- where
-  fromCsv line =
-    case T.splitOn "," line of
-      [slot, ref, retry] -> do
-        i <- readIO $ T.unpack slot
-        n <- readIO $ T.unpack retry
-        pure $ Map.singleton (TxRef i ref) n
-      _ ->
-        throwIO $ CouldntParseCsv filepath $ "invalid line: " <> line
-
-tshow :: Show a => a -> Text
-tshow = T.pack . show
 
 --
 -- Helpers
