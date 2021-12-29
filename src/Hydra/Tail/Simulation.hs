@@ -23,7 +23,6 @@ import Control.Monad.Class.MonadAsync (
   async,
   concurrently_,
   forConcurrently_,
-  replicateConcurrently_,
  )
 import Control.Monad.Class.MonadSTM (
   MonadSTM,
@@ -85,10 +84,8 @@ import qualified Data.Map.Strict as Map
 import Data.Ratio (
   (%),
  )
-import qualified Data.Set as Set
 import Data.Time.Clock (
   DiffTime,
-  picosecondsToDiffTime,
   secondsToDiffTime,
  )
 import GHC.Generics (
@@ -129,11 +126,6 @@ import Hydra.Tail.Simulation.Utils (
   withLabel,
   withTMVar,
   withTMVar_,
- )
-import HydraSim.DelayedComp (
-  DelayedComp,
-  delayedComp,
-  runComp,
  )
 import HydraSim.Examples.Channels (
   AWSCenters (..),
@@ -331,10 +323,7 @@ runServer ::
 runServer tracer options Server{multiplexer, registry, transactions} = do
   concurrently_
     (startMultiplexer (contramap TraceServerMultiplexer tracer) multiplexer)
-    ( replicateConcurrently_
-        (options ^. #serverOptions . #concurrency)
-        (withLabel "Main: Server" serverMain)
-    )
+    (withLabel "Main: Server" serverMain)
  where
   serverMain =
     forever $
@@ -342,9 +331,6 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
 
   handleMessage = \case
     (clientId, NewTx tx) -> do
-      void $ runComp (txValidate Set.empty tx)
-      void $ runComp lookupClient
-
       -- Some of the recipients or the sender may be out of their payment window
       -- (i.e. 'DoingSnapshot'), if that's the case, we cannot process the transaction
       -- until they are done.
@@ -448,7 +434,6 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
 
                   pure $ Just (st', balance', mailbox', pending)
     (clientId, SnapshotDone) -> do
-      runComp lookupClient
       pending <- withTMVar registry $ \clients -> do
         case Map.lookup clientId clients of
           Nothing -> pure ([], clients)
@@ -458,17 +443,6 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
       mapM_ handleMessage (reverse $ (clientId,) <$> pending)
     (clientId, msg) ->
       throwIO (UnexpectedServerMsg clientId msg)
-
--- | A computation simulating the time needed to lookup a client in an in-memory registry.
--- The value is taken from running benchmarks of the 'containers' Haskell library on a
--- high-end laptop. The time needed to perform a lookup was deemed non negligeable in front of
--- the time needed to validate a transaction.
---
--- Note that a typical hashmap or map is implemented using balanced binary trees and provide a O(log(n))
--- lookup performances, so the cost of looking a client in a map of 1000 or 100000 clients is _roughly the same_.
-lookupClient :: DelayedComp ()
-lookupClient =
-  delayedComp () (picosecondsToDiffTime 500 * 1e6) -- 500μs
 
 -- | Return 'f (Just ClientId)' iif a client would exceed (bottom or top) its payment window
 -- from the requested payment, or if it's already performing a snapshot.

@@ -250,7 +250,6 @@ serverOptionsOption :: Parser ServerOptions
 serverOptionsOption =
   ServerOptions
     <$> serverRegionOption
-    <*> serverConcurrencyOption
     <*> serverReadCapacityOption
     <*> serverWriteCapacityOption
 
@@ -262,8 +261,6 @@ clientOptionsOption =
 data ServerOptions = ServerOptions
   { -- | 'Server' region
     region :: AWSCenters
-  , -- | 'Server' concurrency capabilities, that is, how many requests can it handle in parallel.
-    concurrency :: Int
   , -- | 'Server' network read capacity, in KBits/s
     readCapacity :: NetworkCapacity
   , -- | 'Server' network write capacity, in KBits/s
@@ -283,16 +280,6 @@ serverRegionOption =
       <> completer (listCompleter awsCenters)
  where
   awsCenters = [show @AWSCenters center | center <- [minBound .. maxBound]]
-
-serverConcurrencyOption :: Parser Int
-serverConcurrencyOption =
-  option auto $
-    mempty
-      <> long "concurrency"
-      <> metavar "INT"
-      <> value 16
-      <> showDefault
-      <> help "Number of request the server can process concurrently."
 
 serverReadCapacityOption :: Parser NetworkCapacity
 serverReadCapacityOption =
