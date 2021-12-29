@@ -257,8 +257,7 @@ serverOptionsOption =
 clientOptionsOption :: Parser ClientOptions
 clientOptionsOption =
   ClientOptions
-    <$> clientOnlineLikelihoodOption
-    <*> clientSubmitLikelihoodOption
+    <$> clientSubmitLikelihoodOption
 
 data ServerOptions = ServerOptions
   { -- | 'Server' region
@@ -304,24 +303,12 @@ serverWriteCapacityOption =
   networkCapacityOption Write (100 * 1024)
 
 data ClientOptions = ClientOptions
-  { -- | Likelihood of an offline 'Client' to go online at the current slot.
-    onlineLikelihood :: Rational
-  , -- | Likelihood of a 'Client' to submit a transaction at the current slot.
+  { -- | Likelihood of a 'Client' to submit a transaction at the current slot.
     -- This models the behavior of clients that only go online to check on the
     -- server state but not necessarily submit any transactions.
     submitLikelihood :: Rational
   }
   deriving (Generic, Show)
-
-clientOnlineLikelihoodOption :: Parser Rational
-clientOnlineLikelihoodOption =
-  option auto $
-    mempty
-      <> long "online-likelihood"
-      <> metavar "NUM%DEN"
-      <> value (1 % 10)
-      <> showDefault
-      <> help "Likelihood of a client to go online on the next slot."
 
 clientSubmitLikelihoodOption :: Parser Rational
 clientSubmitLikelihoodOption =

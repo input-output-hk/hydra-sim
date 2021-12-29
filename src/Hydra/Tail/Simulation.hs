@@ -397,13 +397,7 @@ data Msg
     -- want to challenge this assumption by analyzing real transaction patterns from the
     -- main chain and model this behavior.
     NewTx !MockTx
-  | -- | Sent when waking up to catch up on messages received when offline.
-    Pull
-  | -- | Client connections and disconnections are modelled using 0-sized messages.
-    Connect
-  | -- | Client connections and disconnections are modelled using 0-sized messages.
-    Disconnect
-  | -- | Clients informing the server about the end of a snapshot
+  | -- | Notify the server that a snapshot was performed.
     SnapshotDone
   | --
     -- ↓↓↓ Server messages ↓↓↓
@@ -423,12 +417,6 @@ instance Sized Msg where
   size = \case
     NewTx tx ->
       sizeOfHeader + size tx + sizeOfAddress * fromIntegral (length $ txRecipients tx)
-    Pull ->
-      sizeOfHeader
-    Connect{} ->
-      0
-    Disconnect{} ->
-      0
     NeedSnapshot{} ->
       sizeOfHeader
     SnapshotDone{} ->
@@ -516,12 +504,12 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
       void $ runComp lookupClient
 
       -- Some of the recipients or the sender may be out of their payment window
-      -- (i.e. 'Blocked'), if that's the case, we cannot process the transaction
+      -- (i.e. 'DoingSnapshot'), if that's the case, we cannot process the transaction
       -- until they are done.
       blocked <- withTMVar registry $ \clients ->
         (,clients)
           <$> Map.traverseMaybeWithKey
-            (matchBlocked (options ^. #paymentWindow) (clientId, tx))
+            (matchDoingSnapshot (options ^. #paymentWindow) (clientId, tx))
             clients
       if not (null blocked)
         then do
@@ -554,7 +542,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
                       --
                       -- Eventually, once all clients are done, it goes through.
                       let pending' = if ix == (0 :: Int) then NewTx tx : pending else pending
-                      pure $ Just (Blocked, balance, mailbox, pending')
+                      pure $ Just (DoingSnapshot, balance, mailbox, pending')
                 _ -> do
                   pure () -- Already blocked, and snapshot already requested.
         else do
@@ -605,37 +593,18 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
                       if inProactiveSnapshotLimit options balance'
                         then do
                           sendTo multiplexer clientId NeedSnapshot
-                          pure (Blocked, mailbox)
+                          pure (DoingSnapshot, mailbox)
                         else do
                           pure (st, mailbox)
                     _ -> do
                       let ack = AckTx (txRef tx)
                       if inProactiveSnapshotLimit options balance'
                         then do
-                          pure (Blocked, NeedSnapshot : ack : mailbox)
+                          pure (DoingSnapshot, NeedSnapshot : ack : mailbox)
                         else do
                           pure (st, ack : mailbox)
 
                   pure $ Just (st', balance', mailbox', pending)
-    (clientId, Pull) -> do
-      runComp lookupClient
-      withTMVar_ registry $ \clients -> do
-        updateF
-          clientId
-          ( \case
-              (st, balance, mailbox, pending) -> do
-                mapM_ (sendTo multiplexer clientId) (reverse mailbox)
-                pure $ Just (st, balance, [], pending)
-          )
-          clients
-    (clientId, Connect) -> do
-      runComp lookupClient
-      withTMVar_ registry $ \clients -> do
-        return $ Map.update (\(_, balance, mailbox, pending) -> Just (Online, balance, mailbox, pending)) clientId clients
-    (clientId, Disconnect) -> do
-      runComp lookupClient
-      withTMVar_ registry $ \clients -> do
-        return $ Map.update (\(_, balance, mailbox, pending) -> Just (Offline, balance, mailbox, pending)) clientId clients
     (clientId, SnapshotDone) -> do
       runComp lookupClient
       pending <- withTMVar registry $ \clients -> do
@@ -666,19 +635,19 @@ lookupClient =
 -- of the _sender_. So the amount corresponds to how much did the sender "lost" in the
 -- transaction, but, there can be multiple recipients! Irrespective of this, we consider
 -- in the simulation that *each* recipient receives the full amount.
-matchBlocked ::
+matchDoingSnapshot ::
   Applicative f =>
   Maybe Ada ->
   (ClientId, MockTx) ->
   ClientId ->
   (ClientState, Balance, mailbox, pending) ->
   f (Maybe (ClientId, Maybe Msg))
-matchBlocked Nothing _ _ _ =
+matchDoingSnapshot Nothing _ _ _ =
   pure Nothing
-matchBlocked (Just paymentWindow) (sender, tx) clientId (st, balance, _, _)
+matchDoingSnapshot (Just paymentWindow) (sender, tx) clientId (st, balance, _, _)
   | clientId `elem` txRecipients tx =
     case (st, viewPaymentWindow (lovelace paymentWindow) balance (received tx)) of
-      (Blocked, _) ->
+      (DoingSnapshot, _) ->
         pure (Just (clientId, Nothing))
       (_, OutOfPaymentWindow) ->
         pure (Just (clientId, Just NeedSnapshot))
@@ -686,7 +655,7 @@ matchBlocked (Just paymentWindow) (sender, tx) clientId (st, balance, _, _)
         pure Nothing
   | clientId == sender =
     case (st, viewPaymentWindow (lovelace paymentWindow) balance (negate $ sent tx)) of
-      (Blocked, _) ->
+      (DoingSnapshot, _) ->
         pure (Just (clientId, Nothing))
       (_, OutOfPaymentWindow) ->
         pure (Just (clientId, Just NeedSnapshot))
@@ -733,7 +702,7 @@ instance Exception UnknownClient
 
 type ClientId = NodeId
 
-data ClientState = Online | Offline | Blocked
+data ClientState = Online | DoingSnapshot
   deriving (Generic, Show, Eq)
 
 data Client m = Client
@@ -818,10 +787,6 @@ runClient tracer events serverId opts Client{multiplexer, identifier} = do
     (e : q) | (slot :: Event -> SlotNo) e <= currentSlot -> do
       atomically $ takeTMVar waitForAck
       withTMVar_ var $ \_st -> do
-        -- NOTE: Clients no longer go offline
-        -- when (st == Offline) $ do
-        --   traceWith tracer (TraceClientWakeUp currentSlot)
-        --   sendTo multiplexer serverId Connect
         Online <$ sendTo multiplexer serverId (msg e)
       case msg e of
         NewTx{} -> do
@@ -830,9 +795,6 @@ runClient tracer events serverId opts Client{multiplexer, identifier} = do
         _ -> atomically $ putTMVar waitForAck ()
       clientEventLoop waitForAck var currentSlot q
     (e : q) -> do
-      -- NOTE: Clients no longer go offline.
-      -- withTMVar_ var $ \st ->
-      --   Offline <$ when (st == Online) (sendTo multiplexer serverId Disconnect)
       threadDelay (opts ^. #slotLength)
       clientEventLoop waitForAck var (currentSlot + 1) (e : q)
 
@@ -848,10 +810,8 @@ stepClient ::
   ClientId ->
   StateT StdGen m [Event]
 stepClient options currentSlot identifier = do
-  pOnline <- state (randomR (1, 100))
-  let online = pOnline % 100 <= onlineLikelihood
   pSubmit <- state (randomR (1, 100))
-  let submit = online && (pSubmit % 100 <= submitLikelihood)
+  let submit = pSubmit % 100 <= submitLikelihood
   recipient <- pickRecipient identifier (options ^. #numberOfClients)
 
   -- NOTE: The distribution is extrapolated from real mainchain data.
@@ -883,12 +843,6 @@ stepClient options currentSlot identifier = do
   pure
     [ Event currentSlot identifier msg
     | (predicate, msg) <-
-        -- NOTE: Clients no longer go offline
-        -- [
-        --   ( online
-        --   , Pull
-        --   )
-        -- ,
         [
           ( submit
           , NewTx (mockTx identifier currentSlot (lovelace amount) txSize [recipient])
@@ -897,7 +851,7 @@ stepClient options currentSlot identifier = do
     , predicate
     ]
  where
-  ClientOptions{onlineLikelihood, submitLikelihood} = options ^. #clientOptions
+  ClientOptions{submitLikelihood} = options ^. #clientOptions
 
 data TraceClient
   = TraceClientMultiplexer (TraceMultiplexer Msg)
@@ -1001,14 +955,6 @@ readEventsThrow filepath = do
 
 eventToCsv :: Event -> Text
 eventToCsv = \case
-  -- slot,clientId,'pull'
-  Event (SlotNo sl) (NodeId cl) Pull ->
-    T.intercalate
-      ","
-      [ T.pack (show sl)
-      , T.pack (show cl)
-      , "pull"
-      ]
   -- slot,clientId,new-tx,size,amount,recipients
   Event (SlotNo sl) (NodeId cl) (NewTx (MockTx _ (Size sz) (Lovelace am) rs)) ->
     T.intercalate
@@ -1026,12 +972,6 @@ eventToCsv = \case
 eventFromCsv :: Text -> Maybe Event
 eventFromCsv line =
   case T.splitOn "," line of
-    -- slot,clientId,'pull'
-    (sl : (cl : ("pull" : _))) ->
-      Event
-        <$> readSlotNo sl
-        <*> readClientId cl
-        <*> pure Pull
     -- slot,clientId,new-tx,size,amount,recipients
     [sl, cl, "new-tx", sz, am, rs] ->
       Event
