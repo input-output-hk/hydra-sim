@@ -17,6 +17,7 @@ import Control.Monad (
   forever,
   join,
   void,
+  when,
  )
 import Control.Monad.Class.MonadAsync (
   MonadAsync,
@@ -176,7 +177,7 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
   server <- newServer serverId clientIds serverOptions
   clients <- forM clientIds $ \clientId -> do
     client <- newClient clientId
-    client <$ connectClient client server
+    (clientId, client) <$ connectClient client server
   void $
     async $
       concurrently_
@@ -540,9 +541,9 @@ runClient ::
   [Event] ->
   ServerId ->
   RunOptions ->
-  Client m ->
+  (ClientId, Client m) ->
   m ()
-runClient tracer events serverId opts Client{multiplexer, identifier} = do
+runClient tracer events serverId opts (clientId, Client{multiplexer, identifier}) = do
   snapshotLock <- newTMVarIO ()
   ackLock <- newTMVarIO ()
   concurrently_
@@ -580,18 +581,21 @@ runClient tracer events serverId opts Client{multiplexer, identifier} = do
     [] ->
       pure ()
     (e : q) | from e /= identifier -> do
+      when (clientId == 1) $ traceWith tracer (TraceClientTick currentSlot)
       clientEventLoop ackLock snapshotLock currentSlot q
     (e : q) | (slot :: Event -> SlotNo) e > currentSlot -> do
+      when (clientId == 1) $ traceWith tracer (TraceClientTick currentSlot)
       threadDelay (opts ^. #slotLength)
       clientEventLoop ackLock snapshotLock (currentSlot + 1) (e : q)
     (e : q) -> do
+      when (clientId == 1) $ traceWith tracer (TraceClientTick currentSlot)
       atomically $ takeTMVar ackLock
       -- Ensure we can only send message to the server if we aren't doing a snapshot.
       withTMVar_ snapshotLock $ \() -> do
         sendTo multiplexer serverId (msg e)
       case msg e of
-        NewTx{} -> do
-          traceWith tracer (TraceClientWakeUp currentSlot)
+        NewTx{} ->
+          pure ()
         _ ->
           -- If no transaction was sent, we can put back the lock and process the next event.
           -- Otherwise, the lock is replaced by the 'clientMain' when processing a 'AckTx'
@@ -656,7 +660,7 @@ stepClient options currentSlot identifier = do
 
 data TraceClient
   = TraceClientMultiplexer (TraceMultiplexer Msg)
-  | TraceClientWakeUp SlotNo
+  | TraceClientTick SlotNo
   deriving (Show)
 
 --

@@ -305,7 +305,7 @@ clientSubmitLikelihoodOption =
       <> metavar "NUM%DEN"
       <> value (1 % 3)
       <> showDefault
-      <> help "Likelihood of a client to submit a transaction when it goes online."
+      <> help "Likelihood of a client to submit a transaction at each slot."
 
 analyzeOptionsParser :: Parser AnalyzeOptions
 analyzeOptionsParser =

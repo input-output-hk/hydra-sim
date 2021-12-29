@@ -136,7 +136,7 @@ analyzeSimulation options notify trace = do
             )
           (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId (NewTx tx)))) ->
             (\(!m, !r, !n, !rt, !sl) -> pure (Map.insert (txRef tx) [t] m, r, n, rt, sl))
-          (_threadLabel, _time, TraceClient (TraceClientWakeUp sl')) ->
+          (_threadLabel, _time, TraceClient (TraceClientTick sl')) ->
             ( \(!m, !r, !n, !rt, !sl) ->
                 if sl' > sl
                   then
