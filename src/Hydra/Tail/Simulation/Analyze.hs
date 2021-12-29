@@ -81,10 +81,9 @@ data Analyze = Analyze
   , -- | Average time for a transaction to get 'confirmed'. This includes snapshotting when
     -- relevant.
     averageConfirmationTime :: Double
-  , -- | How many confirmed transactions had been confirmed within one slot, 10 slots and one tenth of a slots
+  , -- | How many confirmed transactions had been confirmed within one slot, 10 slots.
     percentConfirmedWithin1Slot :: Double
   , percentConfirmedWithin10Slots :: Double
-  , percentConfirmedWithinTenthOfSlot :: Double
   }
   deriving (Generic, Show)
 
@@ -167,7 +166,6 @@ mkAnalyze AnalyzeOptions{discardEdges} txs retries numberOfSnapshots numberOfSub
     , averageConfirmationTime
     , percentConfirmedWithin10Slots
     , percentConfirmedWithin1Slot
-    , percentConfirmedWithinTenthOfSlot
     }
  where
   numberOfConfirmedTransactions = length confirmationTimes
@@ -199,8 +197,5 @@ mkAnalyze AnalyzeOptions{discardEdges} txs retries numberOfSnapshots numberOfSub
 
   percentConfirmedWithin10Slots =
     length (filter (< 10) confirmationTimes) `percentOf` numberOfConfirmedTransactions
-
-  percentConfirmedWithinTenthOfSlot =
-    length (filter (< 0.1) confirmationTimes) `percentOf` numberOfConfirmedTransactions
 
   percentOf a b = (fromIntegral a :: Double) / fromIntegral b
