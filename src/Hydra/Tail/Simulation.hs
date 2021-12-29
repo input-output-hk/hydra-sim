@@ -585,60 +585,61 @@ runClient ::
   Client m ->
   m ()
 runClient tracer events serverId opts Client{multiplexer, identifier} = do
-  st <- newTMVarIO Online
-  semaphore <- newTMVarIO ()
+  snapshotLock <- newTMVarIO ()
+  ackLock <- newTMVarIO ()
   concurrently_
     (startMultiplexer (contramap TraceClientMultiplexer tracer) multiplexer)
     ( concurrently_
-        (withLabel ("EventLoop: " <> show identifier) $ clientEventLoop semaphore st 0 events)
-        (withLabel ("Main: " <> show identifier) $ forever $ clientMain semaphore st)
+        (withLabel ("EventLoop: " <> show identifier) $ clientEventLoop ackLock snapshotLock 0 events)
+        (withLabel ("Main: " <> show identifier) $ forever $ clientMain ackLock snapshotLock)
     )
  where
-  clientMain :: TMVar m () -> TMVar m ClientState -> m ()
-  clientMain !waitForAck !var =
+  clientMain :: TMVar m () -> TMVar m () -> m ()
+  clientMain !ackLock !snapshotLock =
     atomically (getMessage multiplexer) >>= \case
       (_, AckTx{}) ->
         -- NOTE(SN): For pro-active snapshot handling, we would ideally keep
         -- track for the client's payment window here and decide whether or not
         -- to snapshot. For simplicity reasons, this is also shifted to the
         -- server (for now) as we do track payment windows there.
-        atomically $ putTMVar waitForAck ()
+        atomically $ putTMVar ackLock ()
       (_, NotifyTx tx) ->
         sendTo multiplexer serverId (AckTx (txRef tx))
       (_, NeedSnapshot{}) -> do
         -- NOTE: Holding on the MVar here prevents the client's event loop from
         -- processing any new event. The other will block until the snapshot is done.
-        withTMVar_ var $ \st -> do
+        withTMVar_ snapshotLock $ \() -> do
           threadDelay settlementDelay_
           sendTo multiplexer serverId SnapshotDone
-          pure st
       (nodeId, msg) ->
         throwIO $ UnexpectedClientMsg nodeId msg
    where
     settlementDelay_ =
-      secondsToDiffTime (unSlotNo (opts ^. #settlementDelay))
-        * (opts ^. #slotLength)
+      secondsToDiffTime (unSlotNo (opts ^. #settlementDelay)) * (opts ^. #slotLength)
 
-  clientEventLoop :: TMVar m () -> TMVar m ClientState -> SlotNo -> [Event] -> m ()
-  clientEventLoop !waitForAck !var !currentSlot = \case
+  clientEventLoop :: TMVar m () -> TMVar m () -> SlotNo -> [Event] -> m ()
+  clientEventLoop !ackLock !snapshotLock !currentSlot = \case
     [] ->
       pure ()
-    (e : q)
-      | from e /= identifier ->
-        clientEventLoop waitForAck var currentSlot q
-    (e : q) | (slot :: Event -> SlotNo) e <= currentSlot -> do
-      atomically $ takeTMVar waitForAck
-      withTMVar_ var $ \_st -> do
-        Online <$ sendTo multiplexer serverId (msg e)
+    (e : q) | from e /= identifier -> do
+      clientEventLoop ackLock snapshotLock currentSlot q
+    (e : q) | (slot :: Event -> SlotNo) e > currentSlot -> do
+      threadDelay (opts ^. #slotLength)
+      clientEventLoop ackLock snapshotLock (currentSlot + 1) (e : q)
+    (e : q) -> do
+      atomically $ takeTMVar ackLock
+      -- Ensure we can only send message to the server if we aren't doing a snapshot.
+      withTMVar_ snapshotLock $ \() -> do
+        sendTo multiplexer serverId (msg e)
       case msg e of
         NewTx{} -> do
           traceWith tracer (TraceClientWakeUp currentSlot)
-          pure ()
-        _ -> atomically $ putTMVar waitForAck ()
-      clientEventLoop waitForAck var currentSlot q
-    (e : q) -> do
-      threadDelay (opts ^. #slotLength)
-      clientEventLoop waitForAck var (currentSlot + 1) (e : q)
+        _ ->
+          -- If no transaction was sent, we can put back the lock and process the next event.
+          -- Otherwise, the lock is replaced by the 'clientMain' when processing a 'AckTx'
+          -- message from the server.
+          atomically $ putTMVar ackLock ()
+      clientEventLoop ackLock snapshotLock currentSlot q
 
 data UnexpectedClientMsg = UnexpectedClientMsg NodeId Msg
   deriving (Show)
