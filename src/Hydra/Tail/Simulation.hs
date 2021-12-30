@@ -338,7 +338,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
       blocked <- withTMVar registry $ \clients ->
         (,clients)
           <$> Map.traverseMaybeWithKey
-            (matchDoingSnapshot (options ^. #paymentWindow) (clientId, tx))
+            (matchBlocked (options ^. #paymentWindow) (clientId, tx))
             clients
       if not (null blocked)
         then do
@@ -436,16 +436,16 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
 -- of the _sender_. So the amount corresponds to how much did the sender "lost" in the
 -- transaction, but, there can be multiple recipients! Irrespective of this, we consider
 -- in the simulation that *each* recipient receives the full amount.
-matchDoingSnapshot ::
+matchBlocked ::
   Applicative f =>
   Maybe Ada ->
   (ClientId, MockTx) ->
   ClientId ->
   (ClientState, Balance, pending) ->
   f (Maybe (ClientId, Maybe Msg))
-matchDoingSnapshot Nothing _ _ _ =
+matchBlocked Nothing _ _ _ =
   pure Nothing
-matchDoingSnapshot (Just paymentWindow) (sender, tx) clientId (st, balance, _)
+matchBlocked (Just paymentWindow) (sender, tx) clientId (st, balance, _)
   | clientId `elem` txRecipients tx =
     case (st, viewPaymentWindow (lovelace paymentWindow) balance (received tx)) of
       (DoingSnapshot, _) ->
