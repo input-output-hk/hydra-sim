@@ -84,6 +84,9 @@ import Data.Map.Strict (
   Map,
  )
 import qualified Data.Map.Strict as Map
+import Data.Maybe (
+  mapMaybe,
+ )
 import Data.Ratio (
   (%),
  )
@@ -175,7 +178,7 @@ prepareSimulation options@PrepareOptions{numberOfClients, duration} = do
 
 runSimulation :: RunOptions -> [Event] -> Trace ()
 runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
-  let (serverId, clientIds) = (0, [1 .. fromInteger (getNumberOfClients events)])
+  let (serverId, clientIds) = (0, [1 .. greatestKnownClient events])
   server <- newServer serverId clientIds serverOptions
   clients <- forM clientIds $ \clientId -> do
     client <- newClient clientId
@@ -726,7 +729,7 @@ summarizeEvents RunOptions{paymentWindow} events =
     }
  where
   numberOfEvents = toInteger $ length events
-  numberOfClients = getNumberOfClients events
+  numberOfClients = toInteger $ fromEnum $ greatestKnownClient events
   (volumeTotal, numberOfTransactions) = foldl' count (0, NumberOfTransactions 0 0 0 0) events
    where
     w = maybe 1e99 (asDouble . lovelace) paymentWindow
@@ -764,6 +767,22 @@ getNumberOfClients =
 --
 -- Helpers
 --
+
+greatestKnownClient :: [Event] -> ClientId
+greatestKnownClient events =
+  max
+    ( maximum
+        (from <$> events)
+    )
+    ( maximum
+        ( mapMaybe
+            ( \case
+                Event{msg = NewTx MockTx{txRecipients}} -> Just (maximum txRecipients)
+                _ -> Nothing
+            )
+            events
+        )
+    )
 
 getRegion ::
   [AWSCenters] ->
