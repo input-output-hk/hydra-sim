@@ -23,7 +23,7 @@ const
 const FILENAME = process.env["BITCOIN_OTC_FILENAME"] || path.join(__dirname, "bitcoin-otc.csv");
 const DURATION = parseInt(process.env["BITCOIN_OTC_DURATION"] || "3600", 10);
 const TARGET_TPS = parseInt(process.env["BITCOIN_OTC_TARGET_TPS"] || "250", 10);
-const OUTPUT_FILENAME = path.basename(FILENAME, ".csv") + ":" + DURATION + "s:" + TARGET_TPS + "tps.csv"
+const OUTPUT_FILENAME = path.basename(FILENAME, ".csv") + "__duration:" + DURATION + "-tps:" + TARGET_TPS + ".csv"
 
 const graph = [];
 fs.createReadStream(FILENAME)
