@@ -253,7 +253,7 @@ instance Sized Msg where
     NewTx tx ->
       sizeOfHeader + size tx + sizeOfAddress * fromIntegral (length $ txRecipients tx)
     NeedSnapshot{} ->
-      sizeOfHeader
+      0
     SnapshotDone{} ->
       sizeOfHeader
     NotifyTx tx ->
