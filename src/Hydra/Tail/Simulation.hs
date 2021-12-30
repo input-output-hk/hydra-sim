@@ -17,7 +17,6 @@ import Control.Monad (
   forever,
   join,
   void,
-  when,
  )
 import Control.Monad.Class.MonadAsync (
   MonadAsync,
@@ -77,6 +76,9 @@ import Data.List (
   delete,
   foldl',
   maximumBy,
+ )
+import Data.Map (
+  (!),
  )
 import Data.Map.Strict (
   Map,
@@ -182,7 +184,10 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
     async $
       concurrently_
         (runServer trServer opts server)
-        (forConcurrently_ clients (runClient trClient (trim events) serverId opts))
+        ( concurrently_
+            (runEventLoop trEventLoop opts serverId (Map.fromList clients) (trim events))
+            (forConcurrently_ (snd <$> clients) (runClient trClient serverId opts))
+        )
   -- XXX(SN): This does not take into account that there might still be clients
   -- running and this likely leads to a differing number of confirmed
   -- transactions for the same events dataset with different parameters (e.g.
@@ -213,6 +218,9 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
 
   trServer :: Tracer (IOSim a) TraceServer
   trServer = contramap TraceServer tracer
+
+  trEventLoop :: Tracer (IOSim a) TraceEventLoop
+  trEventLoop = contramap TraceEventLoop tracer
 
 --
 -- (Simplified) Tail-Protocol
@@ -267,6 +275,7 @@ instance Sized Msg where
 data TraceTailSimulation
   = TraceServer TraceServer
   | TraceClient TraceClient
+  | TraceEventLoop TraceEventLoop
   deriving (Show)
 
 --
@@ -510,11 +519,15 @@ data Client m = Client
   { multiplexer :: Multiplexer m Msg
   , identifier :: ClientId
   , region :: AWSCenters
+  , ackLock :: TMVar m ()
+  , snapshotLock :: TMVar m ()
   }
   deriving (Generic)
 
 newClient :: MonadSTM m => ClientId -> m (Client m)
 newClient identifier = do
+  snapshotLock <- newTMVarIO ()
+  ackLock <- newTMVarIO ()
   multiplexer <-
     newMultiplexer
       ("client-" <> show (getNodeId identifier))
@@ -522,7 +535,7 @@ newClient identifier = do
       inboundBufferSize
       (capacity $ kbitsPerSecond 512)
       (capacity $ kbitsPerSecond 512)
-  return Client{multiplexer, identifier, region}
+  return Client{multiplexer, identifier, region, ackLock, snapshotLock}
  where
   outboundBufferSize = 1000
   inboundBufferSize = 1000
@@ -538,23 +551,17 @@ runClient ::
   forall m.
   (MonadAsync m, MonadTimer m, MonadThrow m) =>
   Tracer m TraceClient ->
-  [Event] ->
   ServerId ->
   RunOptions ->
-  (ClientId, Client m) ->
+  Client m ->
   m ()
-runClient tracer events serverId opts (clientId, Client{multiplexer, identifier}) = do
-  snapshotLock <- newTMVarIO ()
-  ackLock <- newTMVarIO ()
+runClient tracer serverId opts Client{multiplexer, identifier, ackLock, snapshotLock} = do
   concurrently_
     (startMultiplexer (contramap TraceClientMultiplexer tracer) multiplexer)
-    ( concurrently_
-        (withLabel ("EventLoop: " <> show identifier) $ clientEventLoop ackLock snapshotLock 0 events)
-        (withLabel ("Main: " <> show identifier) $ forever $ clientMain ackLock snapshotLock)
-    )
+    (withLabel ("Client: " <> show identifier) $ forever clientMain)
  where
-  clientMain :: TMVar m () -> TMVar m () -> m ()
-  clientMain !ackLock !snapshotLock =
+  clientMain :: m ()
+  clientMain =
     atomically (getMessage multiplexer) >>= \case
       (_, AckTx{}) ->
         -- NOTE(SN): For pro-active snapshot handling, we would ideally keep
@@ -575,33 +582,6 @@ runClient tracer events serverId opts (clientId, Client{multiplexer, identifier}
    where
     settlementDelay_ =
       secondsToDiffTime (unSlotNo (opts ^. #settlementDelay)) * (opts ^. #slotLength)
-
-  clientEventLoop :: TMVar m () -> TMVar m () -> SlotNo -> [Event] -> m ()
-  clientEventLoop !ackLock !snapshotLock !currentSlot = \case
-    [] ->
-      pure ()
-    (e : q) | from e /= identifier -> do
-      when (clientId == 1) $ traceWith tracer (TraceClientTick currentSlot)
-      clientEventLoop ackLock snapshotLock currentSlot q
-    (e : q) | (slot :: Event -> SlotNo) e > currentSlot -> do
-      when (clientId == 1) $ traceWith tracer (TraceClientTick currentSlot)
-      threadDelay (opts ^. #slotLength)
-      clientEventLoop ackLock snapshotLock (currentSlot + 1) (e : q)
-    (e : q) -> do
-      when (clientId == 1) $ traceWith tracer (TraceClientTick currentSlot)
-      atomically $ takeTMVar ackLock
-      -- Ensure we can only send message to the server if we aren't doing a snapshot.
-      withTMVar_ snapshotLock $ \() -> do
-        sendTo multiplexer serverId (msg e)
-      case msg e of
-        NewTx{} ->
-          pure ()
-        _ ->
-          -- If no transaction was sent, we can put back the lock and process the next event.
-          -- Otherwise, the lock is replaced by the 'clientMain' when processing a 'AckTx'
-          -- message from the server.
-          atomically $ putTMVar ackLock ()
-      clientEventLoop ackLock snapshotLock currentSlot q
 
 data UnexpectedClientMsg = UnexpectedClientMsg NodeId Msg
   deriving (Show)
@@ -660,7 +640,6 @@ stepClient options currentSlot identifier = do
 
 data TraceClient
   = TraceClientMultiplexer (TraceMultiplexer Msg)
-  | TraceClientTick SlotNo
   deriving (Show)
 
 --
@@ -676,6 +655,10 @@ data Event = Event
   , msg :: !Msg
   }
   deriving (Generic, Show)
+
+data TraceEventLoop
+  = TraceEventLoopTick SlotNo
+  deriving (Show)
 
 data SimulationSummary = SimulationSummary
   { numberOfClients :: !Integer
@@ -693,6 +676,44 @@ data NumberOfTransactions = NumberOfTransactions
   , belowTenthOfPaymentWindow :: !Integer
   }
   deriving (Generic, Show)
+
+runEventLoop ::
+  forall m.
+  (MonadAsync m, MonadTimer m) =>
+  Tracer m TraceEventLoop ->
+  RunOptions ->
+  ServerId ->
+  Map ClientId (Client m) ->
+  [Event] ->
+  m ()
+runEventLoop tracer opts serverId clients =
+  withLabel "EventLoop" . loop 0
+ where
+  loop !currentSlot = \case
+    [] ->
+      pure ()
+    (e : q) | (slot :: Event -> SlotNo) e > currentSlot -> do
+      traceWith tracer (TraceEventLoopTick currentSlot)
+      threadDelay (opts ^. #slotLength)
+      loop (currentSlot + 1) (e : q)
+    (e : q) -> do
+      traceWith tracer (TraceEventLoopTick currentSlot)
+      void $
+        async $ do
+          let Client{multiplexer, ackLock, snapshotLock} = clients ! from e
+          atomically $ takeTMVar ackLock
+          -- Ensure we can only send message to the server if we aren't doing a snapshot.
+          withTMVar_ snapshotLock $ \() -> do
+            sendTo multiplexer serverId (msg e)
+          case msg e of
+            NewTx{} ->
+              pure ()
+            _ ->
+              -- If no transaction was sent, we can put back the lock and process the next event.
+              -- Otherwise, the lock is replaced by the 'clientMain' when processing a 'AckTx'
+              -- message from the server.
+              atomically $ putTMVar ackLock ()
+      loop currentSlot q
 
 summarizeEvents :: RunOptions -> [Event] -> SimulationSummary
 summarizeEvents RunOptions{paymentWindow} events =

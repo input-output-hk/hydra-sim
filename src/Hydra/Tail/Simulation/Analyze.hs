@@ -43,6 +43,7 @@ import GHC.Generics (
 import Hydra.Tail.Simulation (
   Msg (..),
   TraceClient (..),
+  TraceEventLoop (..),
   TraceServer (..),
   TraceTailSimulation (..),
  )
@@ -135,7 +136,7 @@ analyzeSimulation options notify trace = do
             )
           (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId (NewTx tx)))) ->
             (\(!m, !r, !n, !rt, !sl) -> pure (Map.insert (txRef tx) [t] m, r, n, rt, sl))
-          (_threadLabel, _time, TraceClient (TraceClientTick sl')) ->
+          (_threadLabel, _time, TraceEventLoop (TraceEventLoopTick sl')) ->
             ( \(!m, !r, !n, !rt, !sl) ->
                 if sl' > sl
                   then
