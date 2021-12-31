@@ -33,6 +33,7 @@ fs.createReadStream(FILENAME)
   })))
   .on('finish', () => {
     const writer = csvWriter(OUTPUT_FILENAME);
+    writer.write("slot,clientId,event,size,amount,recipients\n");
     for (let sl = 0; sl < DURATION; sl += 1) {
         for (let k = 0; k < TARGET_TPS; k += 1) {
           const edge = pickOne(graph);
