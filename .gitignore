@@ -5,3 +5,5 @@
 events.csv
 node_modules
 /datasets/plots/*
+*.out
+*.csv

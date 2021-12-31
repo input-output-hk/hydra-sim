@@ -57,7 +57,7 @@ async function schedule() {
     cursor += 1;
     const filename = path.join(workdir, `duration:${duration}-tps:${tps}-proActive:${proActive}.csv`)
     fs.mkdirSync(path.join(workdir, "simulations"), { recursive: true });
-    const writer = fs.createWriteStream(path.join(workdir, "simulations", `${path.basename(filename, ".csv")}-window:${window}-delay:${delay}`));
+    const writer = fs.createWriteStream(path.join(workdir, "simulations", `${path.basename(filename, ".csv")}.out`));
     const pipeline = spawn("hydra-tail-simulation", [ "run"
       , "--payment-window", window
       , "--settlement-delay", delay
