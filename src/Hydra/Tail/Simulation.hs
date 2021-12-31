@@ -75,7 +75,6 @@ import Data.Generics.Labels ()
 import Data.List (
   delete,
   foldl',
-  maximumBy,
  )
 import Data.Map (
   (!),
@@ -722,47 +721,30 @@ summarizeEvents :: RunOptions -> [Event] -> SimulationSummary
 summarizeEvents RunOptions{paymentWindow} events =
   SimulationSummary
     { numberOfClients
-    , numberOfEvents
     , numberOfTransactions
     , averageTransaction
+    , totalVolume
     , lastSlot
     }
  where
-  numberOfEvents = toInteger $ length events
   numberOfClients = toInteger $ fromEnum $ greatestKnownClient events
-  (volumeTotal, numberOfTransactions) = foldl' count (0, NumberOfTransactions 0 0 0 0) events
+  (ada -> totalVolume, numberOfTransactions) = foldl' count (0, 0) events
    where
-    w = maybe 1e99 (asDouble . lovelace) paymentWindow
+    w = fromMaybe (Lovelace $ round @Double @_ 1e99) paymentWindow
     count (!volume, st) = \case
-      (Event _ _ (NewTx MockTx{txAmount})) ->
-        ( volume + if asDouble txAmount <= w then txAmount else 0
-        , st
-            { total =
-                countIf True st total
-            , belowPaymentWindow =
-                countIf (asDouble txAmount <= w) st belowPaymentWindow
-            , belowHalfOfPaymentWindow =
-                countIf (asDouble txAmount <= (w / 2)) st belowHalfOfPaymentWindow
-            , belowTenthOfPaymentWindow =
-                countIf (asDouble txAmount <= (w / 10)) st belowTenthOfPaymentWindow
-            }
-        )
-      _ -> (volume, st)
-    countIf predicate st fn =
-      if predicate then fn st + 1 else fn st
-    asDouble = fromIntegral @_ @Double . unLovelace
+      (Event _ _ (NewTx MockTx{txAmount}))
+        | txAmount <= w ->
+          (volume + txAmount, st + 1)
+      _ ->
+        (volume, st)
   averageTransaction =
-    ada $ Lovelace $ unLovelace volumeTotal `div` (numberOfTransactions ^. #belowPaymentWindow)
+    Lovelace $ unLovelace (lovelace totalVolume) `div` numberOfTransactions
   lastSlot = last events ^. #slot
 
 -- | Calculate simulation time as the last event + twice the settlement delay.
 durationOf :: RunOptions -> [Event] -> DiffTime
-durationOf RunOptions{slotLength, settlementDelay} events =
-  slotLength * fromIntegral (unSlotNo $ (last events ^. #slot) + 2 * settlementDelay)
-
-getNumberOfClients :: [Event] -> Integer
-getNumberOfClients =
-  toInteger . getNodeId . from . maximumBy (\a b -> getNodeId (from a) `compare` getNodeId (from b))
+durationOf RunOptions{slotLength} events =
+  slotLength * fromIntegral (unSlotNo (last events ^. #slot) + 1)
 
 --
 -- Helpers
