@@ -11,7 +11,7 @@ const __dirname = path.resolve();
 const base = { "window": 100, "delay": 600 }
 const proActives = [ 1, 0.8, 0.6 ];
 const durations = [ 3600 ];
-const tpss = [ 250 ];
+const tpss = [ 100, 250, 500 ];
 
 const matrix = [];
 for (let duration of durations) {
@@ -34,7 +34,7 @@ async function schedule() {
     const { window, delay, duration, tps, proActive } = matrix[cursor];
     console.log(`Running simulation ${JSON.stringify(matrix[cursor])}`);
     cursor += 1;
-    const filename = path.join(__dirname, `bitcoin-otc__duration:${duration}-tps:${tps}.csv`)
+    const filename = path.join(__dirname, "datasets", `bitcoin-otc__duration:${duration}-tps:${tps}.csv`)
     const writer = fs.createWriteStream(path.join(__dirname, `${path.basename(filename, ".csv")}-window:${window}-delay:${delay}-proActive:${proActive}`));
     const pipeline = spawn("hydra-tail-simulation", [ "run"
       , "--payment-window", window
