@@ -120,6 +120,7 @@ executable hydra-tail-simulation
   hs-source-dirs:      exe/tail
   main-is:             Main.hs
   build-depends:       base
+                     , filepath
                      , hydra-sim -any
                      , pretty-simple
   ghc-options:         -O2 -threaded -rtsopts

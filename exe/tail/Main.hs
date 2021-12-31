@@ -22,15 +22,17 @@ import Hydra.Tail.Simulation.Csv (
  )
 import Hydra.Tail.Simulation.Options (
   Command (..),
-  RunOptions,
   defaultAnalyzeOptions,
   parseCommand,
-  proactiveSnapshot,
-  settlementDelay,
   withProgressReport,
  )
-import Hydra.Tail.Simulation.SlotNo (unSlotNo)
-import Text.Pretty.Simple (pPrint)
+import System.FilePath (
+  replaceBaseName,
+  takeBaseName,
+ )
+import Text.Pretty.Simple (
+  pPrint,
+ )
 
 main :: IO ()
 main = do
@@ -39,9 +41,9 @@ main = do
       pPrint options
       events <- prepareSimulation options
       writeEvents filepath events
-    Run options filepath -> do
+    Run options inputFilepath -> do
       pPrint options
-      events <- readEventsThrow filepath
+      events <- readEventsThrow inputFilepath
 
       let summary = summarizeEvents options events
       pPrint summary
@@ -51,38 +53,20 @@ main = do
         analyzeSimulation defaultAnalyzeOptions reportProgress trace
       pPrint $ mkAnalyze defaultAnalyzeOptions txs retries snapshots submittedTxs
 
-      let resTxs = resultName options "txs" summary
-      putStrLn $ "Writing confirmation times into: " <> resTxs
-      writeTransactions resTxs txs
+      let txsFilepath = resultName inputFilepath "txs"
+      putStrLn $ "Writing confirmation times into: " <> txsFilepath
+      writeTransactions txsFilepath txs
 
-      let resRet = resultName options "retries" summary
-      putStrLn $ "Writing retries counts into: " <> resRet
-      writeRetries resRet retries
+      let retriesFilepath = resultName inputFilepath "retries"
+      putStrLn $ "Writing retries counts into: " <> retriesFilepath
+      writeRetries retriesFilepath retries
     Analyze options filepath -> do
-      txs <- readTransactionsThrow filepath
-      retries <- readRetriesThrow filepath
+      txs <- readTransactionsThrow (resultName filepath "txs")
+      retries <- readRetriesThrow (resultName filepath "retries")
       let snapshots = 0 -- FIXME: Get from options or read from file.
       let submittedTxs = 0 -- FIXME
       pPrint $ mkAnalyze options txs retries snapshots submittedTxs
 
-resultName :: RunOptions -> String -> SimulationSummary -> String
-resultName options prefix summary =
-  prefix
-    <> clients
-    <> slots
-    <> settlement
-    <> proactive
-    <> ".csv"
- where
-  clients =
-    "-" <> show (numberOfClients summary) <> "clients"
-
-  slots =
-    "-" <> show (unSlotNo $ lastSlot summary) <> "slots"
-
-  settlement =
-    "-" <> show (unSlotNo $ settlementDelay options) <> "s"
-
-  proactive = case proactiveSnapshot options of
-    Nothing -> ""
-    Just frac -> "-" <> show frac <> "p"
+resultName :: FilePath -> String -> FilePath
+resultName filepath kind =
+  replaceBaseName filepath (takeBaseName filepath <> "[" <> kind <> "]")
