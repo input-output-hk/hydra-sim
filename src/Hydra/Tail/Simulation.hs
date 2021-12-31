@@ -84,6 +84,7 @@ import Data.Map.Strict (
  )
 import qualified Data.Map.Strict as Map
 import Data.Maybe (
+  fromMaybe,
   mapMaybe,
  )
 import Data.Ratio (
@@ -204,7 +205,7 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
   -- filter them out of the simulation if any.
   trim = filter $ \case
     Event _ _ (NewTx tx) ->
-      let double = fromIntegral . unLovelace . lovelace
+      let double = fromIntegral . unLovelace
           asLovelace = Lovelace . round
        in maybe
             True
@@ -449,7 +450,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
 -- in the simulation that *each* recipient receives the full amount.
 matchBlocked ::
   Applicative f =>
-  Maybe Ada ->
+  Maybe Lovelace ->
   (ClientId, MockTx) ->
   ClientId ->
   (ClientState, Balance, pending) ->
@@ -458,7 +459,7 @@ matchBlocked Nothing _ _ _ =
   pure Nothing
 matchBlocked (Just paymentWindow) (sender, tx) clientId (st, balance, _)
   | clientId `elem` txRecipients tx =
-    case (st, viewPaymentWindow (lovelace paymentWindow) balance (received tx)) of
+    case (st, viewPaymentWindow paymentWindow balance (received tx)) of
       (DoingSnapshot, _) ->
         pure (Just (clientId, Nothing))
       (_, OutOfPaymentWindow) ->
@@ -466,7 +467,7 @@ matchBlocked (Just paymentWindow) (sender, tx) clientId (st, balance, _)
       (_, InPaymentWindow) ->
         pure Nothing
   | clientId == sender =
-    case (st, viewPaymentWindow (lovelace paymentWindow) balance (negate $ sent tx)) of
+    case (st, viewPaymentWindow paymentWindow balance (negate $ sent tx)) of
       (DoingSnapshot, _) ->
         pure (Just (clientId, Nothing))
       (_, OutOfPaymentWindow) ->
@@ -484,7 +485,7 @@ inProactiveSnapshotLimit RunOptions{paymentWindow, proactiveSnapshot} Balance{in
  where
   absBalance = abs $ current - initial
 
-  limit w frac = fromDouble (toDouble (lovelace w) * frac)
+  limit w frac = fromDouble (toDouble w * frac)
 
   toDouble :: Lovelace -> Double
   toDouble = fromInteger . unLovelace
@@ -603,7 +604,7 @@ stepClient options currentSlot identifier = do
 
   -- NOTE: The distribution is extrapolated from real mainchain data.
   amount <-
-    fmap Ada $
+    fmap (lovelace . (`Ada` 0)) $
       state $
         frequency
           [ (122, randomR (1, 10))
@@ -632,7 +633,7 @@ stepClient options currentSlot identifier = do
     | (predicate, msg) <-
         [
           ( submit
-          , NewTx (mockTx identifier currentSlot (lovelace amount) txSize [recipient])
+          , NewTx (mockTx identifier currentSlot amount txSize [recipient])
           )
         ]
     , predicate
@@ -664,18 +665,10 @@ data TraceEventLoop
 
 data SimulationSummary = SimulationSummary
   { numberOfClients :: !Integer
-  , numberOfEvents :: !Integer
-  , numberOfTransactions :: !NumberOfTransactions
-  , averageTransaction :: !Ada
+  , numberOfTransactions :: !Integer
+  , averageTransaction :: !Lovelace
+  , totalVolume :: !Ada
   , lastSlot :: !SlotNo
-  }
-  deriving (Generic, Show)
-
-data NumberOfTransactions = NumberOfTransactions
-  { total :: !Integer
-  , belowPaymentWindow :: !Integer
-  , belowHalfOfPaymentWindow :: !Integer
-  , belowTenthOfPaymentWindow :: !Integer
   }
   deriving (Generic, Show)
 
