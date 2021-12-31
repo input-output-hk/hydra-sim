@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedLabels #-}
 {-# LANGUAGE TypeApplications #-}
@@ -69,6 +70,9 @@ import HydraSim.Multiplexer.Trace (
 import HydraSim.Tx.Class (
   Tx (..),
  )
+import Quiet (
+  Quiet (..),
+ )
 
 data Analyze = Analyze
   { numberOfSubmittedTransactions :: Int
@@ -81,7 +85,7 @@ data Analyze = Analyze
     numberOfSnapshots :: Int
   , -- | Average time for a transaction to get 'confirmed'. This includes snapshotting when
     -- relevant.
-    averageConfirmationTime :: Double
+    averageConfirmationTime :: Milliseconds
   , -- | How many confirmed transactions had been confirmed within one slot, 10 slots.
     percentConfirmedWithin1Slot :: Double
   , percentConfirmedWithin10Slots :: Double
@@ -92,6 +96,11 @@ type Transactions = Map (TxRef MockTx) [DiffTime]
 type Retries = Map (TxRef MockTx) Integer
 type NumberOfSnapshots = Int
 type NumberOfSubmittedTransactions = Int
+
+newtype Milliseconds = Milliseconds Integer
+  deriving stock (Eq, Ord, Generic)
+  deriving (Show) via Quiet Milliseconds
+  deriving (Read, Num, Enum) via Integer
 
 analyzeSimulation ::
   forall m.
@@ -189,7 +198,7 @@ mkAnalyze AnalyzeOptions{discardEdges} txs retries numberOfSnapshots numberOfSub
     _ -> Nothing
 
   averageConfirmationTime =
-    totalConfirmationTime / fromIntegral numberOfConfirmedTransactions
+    Milliseconds $ round $ 1000 * totalConfirmationTime / fromIntegral numberOfConfirmedTransactions
 
   totalConfirmationTime = sum confirmationTimes
 
