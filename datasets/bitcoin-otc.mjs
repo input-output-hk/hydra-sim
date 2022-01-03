@@ -4,7 +4,7 @@
  *
  * Usage:
  *     ./bitcoin-otc.mjs
- *     BITCOIN_OTC_PROACTIVE=0.8 ./bitcoin-otc.mjs
+ *     PROACTIVE=0.8 ./bitcoin-otc.mjs
  *
  * Available ENV vars:
  *
