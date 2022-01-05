@@ -145,12 +145,14 @@ data RunOptions = RunOptions
   }
   deriving (Generic, Show)
 
-newtype AnalyzeOptions = AnalyzeOptions
-  {discardEdges :: Maybe Int}
+data AnalyzeOptions = AnalyzeOptions
+  { discardEdges :: Maybe Int
+  , paymentWindow :: Maybe Lovelace
+  }
   deriving (Generic, Show)
 
 defaultAnalyzeOptions :: AnalyzeOptions
-defaultAnalyzeOptions = AnalyzeOptions Nothing
+defaultAnalyzeOptions = AnalyzeOptions Nothing Nothing
 
 prepareOptionsParser :: Parser PrepareOptions
 prepareOptionsParser =
@@ -309,7 +311,9 @@ clientSubmitLikelihoodOption =
 
 analyzeOptionsParser :: Parser AnalyzeOptions
 analyzeOptionsParser =
-  AnalyzeOptions <$> optional discardEdgesOption
+  AnalyzeOptions
+    <$> optional discardEdgesOption
+    <*> optional paymentWindowOption
 
 discardEdgesOption :: Parser Int
 discardEdgesOption =

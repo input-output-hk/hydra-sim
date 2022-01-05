@@ -1,3 +1,6 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE NamedFieldPuns #-}
+
 module Main where
 
 import Prelude
@@ -21,7 +24,9 @@ import Hydra.Tail.Simulation.Csv (
   writeTransactions,
  )
 import Hydra.Tail.Simulation.Options (
+  AnalyzeOptions (..),
   Command (..),
+  RunOptions (..),
   defaultAnalyzeOptions,
   parseCommand,
   withProgressReport,
@@ -41,7 +46,7 @@ main = do
       pPrint options
       events <- prepareSimulation options
       writeEvents filepath events
-    Run options inputFilepath -> do
+    Run options@RunOptions{paymentWindow} inputFilepath -> do
       pPrint options
       events <- readEventsThrow inputFilepath
 
@@ -49,9 +54,11 @@ main = do
       pPrint summary
 
       let trace = runSimulation options events
+      let analyzeOptions :: AnalyzeOptions
+          analyzeOptions = defaultAnalyzeOptions{paymentWindow}
       (txs, retries, snapshots, submittedTxs) <- withProgressReport (lastSlot summary) options $ \reportProgress ->
-        analyzeSimulation defaultAnalyzeOptions reportProgress trace
-      pPrint $ mkAnalyze defaultAnalyzeOptions txs retries snapshots submittedTxs
+        analyzeSimulation analyzeOptions reportProgress trace
+      pPrint $ mkAnalyze analyzeOptions txs retries snapshots submittedTxs
 
       let txsFilepath = resultName inputFilepath "txs"
       putStrLn $ "Writing confirmation times into: " <> txsFilepath
@@ -63,7 +70,7 @@ main = do
     Analyze options filepath -> do
       txs <- readTransactionsThrow (resultName filepath "txs")
       retries <- readRetriesThrow (resultName filepath "retries")
-      let snapshots = 0 -- FIXME: Get from options or read from file.
+      let snapshots = mempty -- FIXME: Get from options or read from file.
       let submittedTxs = 0 -- FIXME
       pPrint $ mkAnalyze options txs retries snapshots submittedTxs
 

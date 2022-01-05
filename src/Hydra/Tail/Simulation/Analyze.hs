@@ -9,7 +9,7 @@ module Hydra.Tail.Simulation.Analyze (
   Analyze (..),
   Transactions,
   Retries,
-  NumberOfSnapshots,
+  Snapshots,
   NumberOfSubmittedTransactions,
   analyzeSimulation,
   mkAnalyze,
@@ -42,6 +42,7 @@ import GHC.Generics (
   Generic,
  )
 import Hydra.Tail.Simulation (
+  ClientId,
   Msg (..),
   TraceClient (..),
   TraceEventLoop (..),
@@ -54,6 +55,9 @@ import Hydra.Tail.Simulation.MockTx (
  )
 import Hydra.Tail.Simulation.Options (
   AnalyzeOptions (..),
+ )
+import Hydra.Tail.Simulation.PaymentWindow (
+  Lovelace (..),
  )
 import Hydra.Tail.Simulation.SlotNo (
   SlotNo (..),
@@ -89,12 +93,16 @@ data Analyze = Analyze
   , -- | How many confirmed transactions had been confirmed within one slot, 10 slots.
     percentConfirmedWithin1Slot :: Double
   , percentConfirmedWithin10Slots :: Double
+  , -- | A measure of how frequent are snapshots on clients. A high coefficient means
+    -- that clients usually "see" a lot of volume before it makes a snapshot. A coefficient
+    -- close to 1 means that clients do snapshot for almost every transaction.
+    rebalancingCoefficient :: Double
   }
   deriving (Generic, Show)
 
 type Transactions = Map (TxRef MockTx) [DiffTime]
 type Retries = Map (TxRef MockTx) Integer
-type NumberOfSnapshots = Int
+type Snapshots = Map ClientId [Lovelace]
 type NumberOfSubmittedTransactions = Int
 
 newtype Milliseconds = Milliseconds Integer
@@ -108,65 +116,77 @@ analyzeSimulation ::
   AnalyzeOptions ->
   (SlotNo -> Maybe Analyze -> m ()) ->
   Trace () ->
-  m (Transactions, Retries, NumberOfSnapshots, NumberOfSubmittedTransactions)
+  m (Transactions, Retries, Snapshots, NumberOfSubmittedTransactions)
 analyzeSimulation options notify trace = do
   (confirmations, retries, snapshots, submittedTxs, _) <-
     let fn ::
           (ThreadLabel, Time, TraceTailSimulation) ->
-          (Transactions, Retries, NumberOfSnapshots, NumberOfSubmittedTransactions, SlotNo) ->
-          m (Transactions, Retries, NumberOfSnapshots, NumberOfSubmittedTransactions, SlotNo)
+          (Transactions, Retries, Snapshots, NumberOfSubmittedTransactions, SlotNo) ->
+          m (Transactions, Retries, Snapshots, NumberOfSubmittedTransactions, SlotNo)
         fn = \case
-          (_threadLabel, _, TraceServer (TraceServerMultiplexer (MPRecvTrailing _nodeId NewTx{}))) ->
-            (\(!m, !r, !n, !rt, !sl) -> pure (m, r, n, rt + 1, sl))
-          (_threadLabel, _, TraceServer (TraceServerMultiplexer (MPRecvTrailing _nodeId SnapshotDone))) ->
-            (\(!m, !r, !n, !rt, !sl) -> pure (m, r, n + 1, rt, sl))
+          (_threadLabel, _, TraceServer (TraceServerMultiplexer (MPRecvTrailing _clientId NewTx{}))) ->
+            (\(!m, !r, !sn, !rt, !sl) -> pure (m, r, sn, rt + 1, sl))
+          (_threadLabel, _, TraceServer (TraceServerMultiplexer (MPRecvTrailing clientId SnapshotDone))) ->
+            (\(!m, !r, !sn, !rt, !sl) -> pure (m, r, Map.adjust (0 :) clientId sn, rt, sl))
           (_threadLabel, _, TraceServer (TraceTransactionBlocked ref)) ->
-            ( \(!m, !r, !n, !rt, !sl) ->
+            ( \(!m, !r, !sn, !rt, !sl) ->
                 let countRetry = \case
                       Nothing -> Just 1
                       Just n -> Just (n + 1)
                  in pure
                       ( m
                       , Map.alter countRetry ref r
-                      , n
+                      , sn
                       , rt
                       , sl
                       )
             )
-          (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPRecvTrailing _nodeId (AckTx ref)))) ->
-            ( \(!m, !r, !n, !rt, !sl) ->
+          (_threadLabel, _, TraceClient clientId (TraceClientMultiplexer (MPRecvTrailing _nodeId (NotifyTx tx)))) ->
+            ( \(!m, !r, !sn, !rt, !sl) -> do
+                let countLovelace =
+                      Just . \case
+                        Just (h : q) -> (h + txAmount tx) : q
+                        _ -> [txAmount tx]
+                pure (m, r, Map.alter countLovelace clientId sn, rt, sl)
+            )
+          (_threadLabel, Time t, TraceClient clientId (TraceClientMultiplexer (MPRecvTrailing _nodeId (AckTx tx)))) ->
+            ( \(!m, !r, !sn, !rt, !sl) -> do
+                let countLovelace =
+                      Just . \case
+                        Just (h : q) -> (h + txAmount tx) : q
+                        _ -> [txAmount tx]
                 pure
-                  ( Map.update (\ts -> Just (t : ts)) ref m
+                  ( Map.update (\ts -> Just (t : ts)) (txRef tx) m
                   , r
-                  , n
+                  , Map.alter countLovelace clientId sn
                   , rt
                   , sl
                   )
             )
           (_threadLabel, Time t, TraceEventLoop (TraceEventLoopTxScheduled ref)) ->
-            (\(!m, !r, !n, !rt, !sl) -> pure (Map.insert ref [t] m, r, n, rt, sl))
+            (\(!m, !r, !sn, !rt, !sl) -> pure (Map.insert ref [t] m, r, sn, rt, sl))
           (_threadLabel, _time, TraceEventLoop (TraceEventLoopTick sl')) ->
-            ( \(!m, !r, !n, !rt, !sl) ->
+            ( \(!m, !r, !sn, !rt, !sl) ->
                 if sl' > sl
                   then
                     if sl' /= 0 && unSlotNo sl' `mod` 60 == 0
-                      then notify sl' (Just $ mkAnalyze options m r n rt) $> (m, r, n, rt, sl')
-                      else notify sl' Nothing $> (m, r, n, rt, sl')
-                  else pure (m, r, n, rt, sl)
+                      then notify sl' (Just $ mkAnalyze options m r sn rt) $> (m, r, sn, rt, sl')
+                      else notify sl' Nothing $> (m, r, sn, rt, sl')
+                  else pure (m, r, sn, rt, sl)
             )
           _ ->
             pure
-     in foldTraceEvents fn (mempty, mempty, 0, 0, -1) trace
+     in foldTraceEvents fn (mempty, mempty, mempty, 0, -1) trace
   pure (confirmations, retries, snapshots, submittedTxs)
 
 mkAnalyze ::
   AnalyzeOptions ->
   Transactions ->
   Retries ->
-  NumberOfSnapshots ->
+  Snapshots ->
   NumberOfSubmittedTransactions ->
   Analyze
-mkAnalyze AnalyzeOptions{discardEdges} txs retries numberOfSnapshots numberOfSubmittedTransactions =
+mkAnalyze AnalyzeOptions{discardEdges, paymentWindow} txs retries snapshots numberOfSubmittedTransactions =
   Analyze
     { numberOfConfirmedTransactions
     , numberOfSubmittedTransactions
@@ -176,13 +196,30 @@ mkAnalyze AnalyzeOptions{discardEdges} txs retries numberOfSnapshots numberOfSub
     , averageConfirmationTime
     , percentConfirmedWithin10Slots
     , percentConfirmedWithin1Slot
+    , rebalancingCoefficient
     }
  where
+  numberOfSnapshots = Map.foldl' (\total xs -> total + length xs - 1) 0 snapshots
+
   numberOfConfirmedTransactions = length confirmationTimes
 
   numberOfRetriedTransactions = Map.size retries
 
   numberOfRetriedConfirmedTransactions = Map.size (retries `Map.restrictKeys` Map.keysSet (Map.filter ((== 2) . length) txs))
+
+  rebalancingCoefficient =
+    let w = maybe 1e99 (fromIntegral . unLovelace) paymentWindow
+        clients =
+          -- NOTE: discarding the first element, because it corresponds to the "ongoing" rebalancing
+          -- amount, which may be misleading because it may report a value just after a snapshot (e.g. 0)
+          -- and skew the estimation towards a smaller value. Except... if there's only one value,
+          -- in which case, we are face to a client that has never done any snapshot, and this value
+          -- is relevant,
+          Map.foldl'
+            (\accum xs -> [fromIntegral x / w | Lovelace x <- tailUnlessSingleton xs] ++ accum)
+            []
+            snapshots
+     in sum clients / fromIntegral (length clients)
 
   confirmationTimes =
     mapMaybe (convertConfirmationTime . snd) . maybeDiscardEdges $ Map.toList txs
@@ -209,3 +246,8 @@ mkAnalyze AnalyzeOptions{discardEdges} txs retries numberOfSnapshots numberOfSub
     length (filter (< 10) confirmationTimes) `percentOf` numberOfConfirmedTransactions
 
   percentOf a b = (fromIntegral a :: Double) / fromIntegral b
+
+tailUnlessSingleton :: [a] -> [a]
+tailUnlessSingleton = \case
+  [x] -> [x]
+  xs -> tail xs

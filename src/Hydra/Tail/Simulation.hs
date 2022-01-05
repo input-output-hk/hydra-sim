@@ -189,7 +189,7 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
         (runServer trServer opts server)
         ( concurrently_
             (runEventLoop trEventLoop opts serverId (Map.fromList clients) (trim events))
-            (forConcurrently_ (snd <$> clients) (runClient trClient serverId opts))
+            (forConcurrently_ (snd <$> clients) (\c -> runClient (trClient c) serverId opts c))
         )
   -- XXX(SN): This does not take into account that there might still be clients
   -- running and this likely leads to a differing number of confirmed
@@ -216,8 +216,8 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
   tracer :: Tracer (IOSim a) TraceTailSimulation
   tracer = Tracer IOSim.traceM
 
-  trClient :: Tracer (IOSim a) TraceClient
-  trClient = contramap TraceClient tracer
+  trClient :: Client m -> Tracer (IOSim a) TraceClient
+  trClient Client{identifier} = contramap (TraceClient identifier) tracer
 
   trServer :: Tracer (IOSim a) TraceServer
   trServer = contramap TraceServer tracer
@@ -256,7 +256,7 @@ data Msg
   | -- | The server requests a client to perform a snapshot.
     NeedSnapshot
   | -- | The server replies to each client submitting a transaction with an acknowledgement.
-    AckTx !(TxRef MockTx)
+    AckTx !MockTx
   deriving (Generic, Show)
 
 instance Sized Msg where
@@ -269,15 +269,15 @@ instance Sized Msg where
       sizeOfHeader
     NotifyTx tx ->
       sizeOfHeader + size tx
-    AckTx txId ->
-      sizeOfHeader + size txId
+    AckTx tx ->
+      sizeOfHeader + size (txId tx)
    where
     sizeOfAddress = 57
     sizeOfHeader = 2
 
 data TraceTailSimulation
   = TraceServer TraceServer
-  | TraceClient TraceClient
+  | TraceClient ClientId TraceClient
   | TraceEventLoop TraceEventLoop
   deriving (Show)
 
@@ -391,7 +391,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
           atomically $ modifyTVar' transactions $ Map.insert (txRef tx) (tx, clientId, txRecipients tx)
           forM_ (txRecipients tx) $ \recipient -> do
             sendTo multiplexer recipient (NotifyTx tx)
-    (clientId, AckTx ref) -> do
+    (clientId, AckTx ack) -> do
       let ackTx = \case
             Nothing -> (Nothing, Nothing)
             Just (tx, sender, clients) ->
@@ -399,7 +399,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
                in if null clients' then (Just (tx, sender), Nothing) else (Nothing, Just (tx, sender, clients'))
 
       processed <- atomically $ do
-        (a, s) <- Map.alterF ackTx ref <$> readTVar transactions
+        (a, s) <- Map.alterF ackTx (txRef ack) <$> readTVar transactions
         a <$ writeTVar transactions s
 
       case processed of
@@ -421,7 +421,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
                   -- client-side but we have the payment window 'registry' only on the
                   -- server for now.
                   st' <- do
-                    sendTo multiplexer sender (AckTx $ txRef tx)
+                    sendTo multiplexer sender (AckTx tx)
                     if inProactiveSnapshotLimit options balance'
                       then do
                         sendTo multiplexer clientId NeedSnapshot
@@ -573,7 +573,7 @@ runClient tracer serverId opts Client{multiplexer, identifier, ackLock, snapshot
         -- server (for now) as we do track payment windows there.
         atomically $ putTMVar ackLock ()
       (_, NotifyTx tx) ->
-        sendTo multiplexer serverId (AckTx (txRef tx))
+        sendTo multiplexer serverId (AckTx tx)
       (_, NeedSnapshot{}) -> do
         -- NOTE: Holding on the MVar here prevents the client's event loop from
         -- processing any new event. The other will block until the snapshot is done.
