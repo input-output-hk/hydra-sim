@@ -661,6 +661,7 @@ data Event = Event
 
 data TraceEventLoop
   = TraceEventLoopTick SlotNo
+  | TraceEventLoopTxScheduled (TxRef MockTx)
   deriving (Show)
 
 data SimulationSummary = SimulationSummary
@@ -694,20 +695,24 @@ runEventLoop tracer opts serverId clients =
     (e : q) -> do
       traceWith tracer (TraceEventLoopTick currentSlot)
       void $
-        async $ do
-          let Client{multiplexer, ackLock, snapshotLock} = clients ! from e
-          atomically $ takeTMVar ackLock
-          -- Ensure we can only send message to the server if we aren't doing a snapshot.
-          withTMVar_ snapshotLock $ \() -> do
-            sendTo multiplexer serverId (msg e)
-          case msg e of
-            NewTx{} ->
-              pure ()
-            _ ->
-              -- If no transaction was sent, we can put back the lock and process the next event.
-              -- Otherwise, the lock is replaced by the 'clientMain' when processing a 'AckTx'
-              -- message from the server.
-              atomically $ putTMVar ackLock ()
+        async $
+          withLabel ("async-" <> show (slot e) <> "-" <> show (from e)) $ do
+            let Client{multiplexer, ackLock, snapshotLock} = clients ! from e
+            case msg e of
+              NewTx tx -> traceWith tracer (TraceEventLoopTxScheduled (txId tx))
+              _ -> pure ()
+            atomically $ takeTMVar ackLock
+            -- Ensure we can only send message to the server if we aren't doing a snapshot.
+            withTMVar_ snapshotLock $ \() -> do
+              sendTo multiplexer serverId (msg e)
+            case msg e of
+              NewTx{} ->
+                pure ()
+              _ ->
+                -- If no transaction was sent, we can put back the lock and process the next event.
+                -- Otherwise, the lock is replaced by the 'clientMain' when processing a 'AckTx'
+                -- message from the server.
+                atomically $ putTMVar ackLock ()
       loop currentSlot q
 
 summarizeEvents :: RunOptions -> [Event] -> SimulationSummary

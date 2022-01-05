@@ -143,8 +143,8 @@ analyzeSimulation options notify trace = do
                   , sl
                   )
             )
-          (_threadLabel, Time t, TraceClient (TraceClientMultiplexer (MPSendTrailing _nodeId (NewTx tx)))) ->
-            (\(!m, !r, !n, !rt, !sl) -> pure (Map.insert (txRef tx) [t] m, r, n, rt, sl))
+          (_threadLabel, Time t, TraceEventLoop (TraceEventLoopTxScheduled ref)) ->
+            (\(!m, !r, !n, !rt, !sl) -> pure (Map.insert ref [t] m, r, n, rt, sl))
           (_threadLabel, _time, TraceEventLoop (TraceEventLoopTick sl')) ->
             ( \(!m, !r, !n, !rt, !sl) ->
                 if sl' > sl
