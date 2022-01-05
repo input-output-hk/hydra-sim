@@ -25,7 +25,7 @@ import
   , __dirname
   } from "../helpers.mjs";
 
-const INPUT_FILENAME = path.join(__dirname, "source.csv");
+const INPUT_FILENAME = path.join(__dirname, "bitcoin-otc", "source.csv");
 const DURATION = parseInt(process.env["DURATION"] || "3600", 10);
 const TARGET_TPS = parseInt(process.env["TPS"] || "250", 10);
 const PROACTIVE_SNAPSHOT = Number(process.env["PROACTIVE"] || "1");
