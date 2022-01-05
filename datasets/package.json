@@ -4,7 +4,13 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "clean": "find bitcoin-otc -type f -name '*.csv' ! -name 'source.csv' -delete && find bitcoin-otc -type f -name '*.out' -delete"
+    "clean": "yarn clean:bitcoin-otc && yarn clean:twitter && yarn clean:twitch",
+    "bitcoin-otc": "./bitcoin-otc/build.mjs",
+    "twitter": "./twitter/build.mjs",
+    "twitch": "./twitch/build.mjs",
+    "clean:bitcoin-otc": "find bitcoin-otc -type f -name '*.csv' ! -name 'source.csv' -delete && find bitcoin-otc -type f -name '*.out' -delete",
+    "clean:twitter": "find twitter -type f -name '*.csv' ! -name 'source.csv' -delete && find twitter -type f -name '*.out' -delete",
+    "clean:twitch": "find twitch -type f -name '*.csv' ! -name 'source.csv' -delete && find twitch -type f -name '*.out' -delete"
   },
   "author": "",
   "license": "ISC",
