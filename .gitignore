@@ -3,3 +3,7 @@
 .direnv/
 .cabal.project.local
 events.csv
+node_modules
+/datasets/plots/*
+*.out
+*.csv

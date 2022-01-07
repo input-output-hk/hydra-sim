@@ -17,7 +17,6 @@ import Control.Monad (
   forever,
   join,
   void,
-  when,
  )
 import Control.Monad.Class.MonadAsync (
   MonadAsync,
@@ -76,12 +75,18 @@ import Data.Generics.Labels ()
 import Data.List (
   delete,
   foldl',
-  maximumBy,
+ )
+import Data.Map (
+  (!),
  )
 import Data.Map.Strict (
   Map,
  )
 import qualified Data.Map.Strict as Map
+import Data.Maybe (
+  fromMaybe,
+  mapMaybe,
+ )
 import Data.Ratio (
   (%),
  )
@@ -173,7 +178,7 @@ prepareSimulation options@PrepareOptions{numberOfClients, duration} = do
 
 runSimulation :: RunOptions -> [Event] -> Trace ()
 runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
-  let (serverId, clientIds) = (0, [1 .. fromInteger (getNumberOfClients events)])
+  let (serverId, clientIds) = (0, [1 .. greatestKnownClient events])
   server <- newServer serverId clientIds serverOptions
   clients <- forM clientIds $ \clientId -> do
     client <- newClient clientId
@@ -182,7 +187,10 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
     async $
       concurrently_
         (runServer trServer opts server)
-        (forConcurrently_ clients (runClient trClient (trim events) serverId opts))
+        ( concurrently_
+            (runEventLoop trEventLoop opts serverId (Map.fromList clients) (trim events))
+            (forConcurrently_ (snd <$> clients) (\c -> runClient (trClient c) serverId opts c))
+        )
   -- XXX(SN): This does not take into account that there might still be clients
   -- running and this likely leads to a differing number of confirmed
   -- transactions for the same events dataset with different parameters (e.g.
@@ -197,7 +205,7 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
   -- filter them out of the simulation if any.
   trim = filter $ \case
     Event _ _ (NewTx tx) ->
-      let double = fromIntegral . unLovelace . lovelace
+      let double = fromIntegral . unLovelace
           asLovelace = Lovelace . round
        in maybe
             True
@@ -208,11 +216,14 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
   tracer :: Tracer (IOSim a) TraceTailSimulation
   tracer = Tracer IOSim.traceM
 
-  trClient :: Tracer (IOSim a) TraceClient
-  trClient = contramap TraceClient tracer
+  trClient :: Client m -> Tracer (IOSim a) TraceClient
+  trClient Client{identifier} = contramap (TraceClient identifier) tracer
 
   trServer :: Tracer (IOSim a) TraceServer
   trServer = contramap TraceServer tracer
+
+  trEventLoop :: Tracer (IOSim a) TraceEventLoop
+  trEventLoop = contramap TraceEventLoop tracer
 
 --
 -- (Simplified) Tail-Protocol
@@ -245,7 +256,7 @@ data Msg
   | -- | The server requests a client to perform a snapshot.
     NeedSnapshot
   | -- | The server replies to each client submitting a transaction with an acknowledgement.
-    AckTx !(TxRef MockTx)
+    AckTx !MockTx
   deriving (Generic, Show)
 
 instance Sized Msg where
@@ -253,20 +264,21 @@ instance Sized Msg where
     NewTx tx ->
       sizeOfHeader + size tx + sizeOfAddress * fromIntegral (length $ txRecipients tx)
     NeedSnapshot{} ->
-      sizeOfHeader
+      0
     SnapshotDone{} ->
       sizeOfHeader
     NotifyTx tx ->
       sizeOfHeader + size tx
-    AckTx txId ->
-      sizeOfHeader + size txId
+    AckTx tx ->
+      sizeOfHeader + size (txId tx)
    where
     sizeOfAddress = 57
     sizeOfHeader = 2
 
 data TraceTailSimulation
   = TraceServer TraceServer
-  | TraceClient TraceClient
+  | TraceClient ClientId TraceClient
+  | TraceEventLoop TraceEventLoop
   deriving (Show)
 
 --
@@ -338,7 +350,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
       blocked <- withTMVar registry $ \clients ->
         (,clients)
           <$> Map.traverseMaybeWithKey
-            (matchDoingSnapshot (options ^. #paymentWindow) (clientId, tx))
+            (matchBlocked (options ^. #paymentWindow) (clientId, tx))
             clients
       if not (null blocked)
         then do
@@ -379,7 +391,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
           atomically $ modifyTVar' transactions $ Map.insert (txRef tx) (tx, clientId, txRecipients tx)
           forM_ (txRecipients tx) $ \recipient -> do
             sendTo multiplexer recipient (NotifyTx tx)
-    (clientId, AckTx ref) -> do
+    (clientId, AckTx ack) -> do
       let ackTx = \case
             Nothing -> (Nothing, Nothing)
             Just (tx, sender, clients) ->
@@ -387,7 +399,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
                in if null clients' then (Just (tx, sender), Nothing) else (Nothing, Just (tx, sender, clients'))
 
       processed <- atomically $ do
-        (a, s) <- Map.alterF ackTx ref <$> readTVar transactions
+        (a, s) <- Map.alterF ackTx (txRef ack) <$> readTVar transactions
         a <$ writeTVar transactions s
 
       case processed of
@@ -409,7 +421,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
                   -- client-side but we have the payment window 'registry' only on the
                   -- server for now.
                   st' <- do
-                    sendTo multiplexer sender (AckTx $ txRef tx)
+                    sendTo multiplexer sender (AckTx tx)
                     if inProactiveSnapshotLimit options balance'
                       then do
                         sendTo multiplexer clientId NeedSnapshot
@@ -436,18 +448,18 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
 -- of the _sender_. So the amount corresponds to how much did the sender "lost" in the
 -- transaction, but, there can be multiple recipients! Irrespective of this, we consider
 -- in the simulation that *each* recipient receives the full amount.
-matchDoingSnapshot ::
+matchBlocked ::
   Applicative f =>
-  Maybe Ada ->
+  Maybe Lovelace ->
   (ClientId, MockTx) ->
   ClientId ->
   (ClientState, Balance, pending) ->
   f (Maybe (ClientId, Maybe Msg))
-matchDoingSnapshot Nothing _ _ _ =
+matchBlocked Nothing _ _ _ =
   pure Nothing
-matchDoingSnapshot (Just paymentWindow) (sender, tx) clientId (st, balance, _)
+matchBlocked (Just paymentWindow) (sender, tx) clientId (st, balance, _)
   | clientId `elem` txRecipients tx =
-    case (st, viewPaymentWindow (lovelace paymentWindow) balance (received tx)) of
+    case (st, viewPaymentWindow paymentWindow balance (received tx)) of
       (DoingSnapshot, _) ->
         pure (Just (clientId, Nothing))
       (_, OutOfPaymentWindow) ->
@@ -455,7 +467,7 @@ matchDoingSnapshot (Just paymentWindow) (sender, tx) clientId (st, balance, _)
       (_, InPaymentWindow) ->
         pure Nothing
   | clientId == sender =
-    case (st, viewPaymentWindow (lovelace paymentWindow) balance (negate $ sent tx)) of
+    case (st, viewPaymentWindow paymentWindow balance (negate $ sent tx)) of
       (DoingSnapshot, _) ->
         pure (Just (clientId, Nothing))
       (_, OutOfPaymentWindow) ->
@@ -473,7 +485,7 @@ inProactiveSnapshotLimit RunOptions{paymentWindow, proactiveSnapshot} Balance{in
  where
   absBalance = abs $ current - initial
 
-  limit w frac = fromDouble (toDouble (lovelace w) * frac)
+  limit w frac = fromDouble (toDouble w * frac)
 
   toDouble :: Lovelace -> Double
   toDouble = fromInteger . unLovelace
@@ -510,11 +522,15 @@ data Client m = Client
   { multiplexer :: Multiplexer m Msg
   , identifier :: ClientId
   , region :: AWSCenters
+  , ackLock :: TMVar m ()
+  , snapshotLock :: TMVar m ()
   }
   deriving (Generic)
 
 newClient :: MonadSTM m => ClientId -> m (Client m)
 newClient identifier = do
+  snapshotLock <- newTMVarIO ()
+  ackLock <- newTMVarIO ()
   multiplexer <-
     newMultiplexer
       ("client-" <> show (getNodeId identifier))
@@ -522,7 +538,7 @@ newClient identifier = do
       inboundBufferSize
       (capacity $ kbitsPerSecond 512)
       (capacity $ kbitsPerSecond 512)
-  return Client{multiplexer, identifier, region}
+  return Client{multiplexer, identifier, region, ackLock, snapshotLock}
  where
   outboundBufferSize = 1000
   inboundBufferSize = 1000
@@ -538,23 +554,17 @@ runClient ::
   forall m.
   (MonadAsync m, MonadTimer m, MonadThrow m) =>
   Tracer m TraceClient ->
-  [Event] ->
   ServerId ->
   RunOptions ->
-  (ClientId, Client m) ->
+  Client m ->
   m ()
-runClient tracer events serverId opts (clientId, Client{multiplexer, identifier}) = do
-  snapshotLock <- newTMVarIO ()
-  ackLock <- newTMVarIO ()
+runClient tracer serverId opts Client{multiplexer, identifier, ackLock, snapshotLock} = do
   concurrently_
     (startMultiplexer (contramap TraceClientMultiplexer tracer) multiplexer)
-    ( concurrently_
-        (withLabel ("EventLoop: " <> show identifier) $ clientEventLoop ackLock snapshotLock 0 events)
-        (withLabel ("Main: " <> show identifier) $ forever $ clientMain ackLock snapshotLock)
-    )
+    (withLabel ("Client: " <> show identifier) $ forever clientMain)
  where
-  clientMain :: TMVar m () -> TMVar m () -> m ()
-  clientMain !ackLock !snapshotLock =
+  clientMain :: m ()
+  clientMain =
     atomically (getMessage multiplexer) >>= \case
       (_, AckTx{}) ->
         -- NOTE(SN): For pro-active snapshot handling, we would ideally keep
@@ -563,7 +573,7 @@ runClient tracer events serverId opts (clientId, Client{multiplexer, identifier}
         -- server (for now) as we do track payment windows there.
         atomically $ putTMVar ackLock ()
       (_, NotifyTx tx) ->
-        sendTo multiplexer serverId (AckTx (txRef tx))
+        sendTo multiplexer serverId (AckTx tx)
       (_, NeedSnapshot{}) -> do
         -- NOTE: Holding on the MVar here prevents the client's event loop from
         -- processing any new event. The other will block until the snapshot is done.
@@ -575,33 +585,6 @@ runClient tracer events serverId opts (clientId, Client{multiplexer, identifier}
    where
     settlementDelay_ =
       secondsToDiffTime (unSlotNo (opts ^. #settlementDelay)) * (opts ^. #slotLength)
-
-  clientEventLoop :: TMVar m () -> TMVar m () -> SlotNo -> [Event] -> m ()
-  clientEventLoop !ackLock !snapshotLock !currentSlot = \case
-    [] ->
-      pure ()
-    (e : q) | from e /= identifier -> do
-      when (clientId == 1) $ traceWith tracer (TraceClientTick currentSlot)
-      clientEventLoop ackLock snapshotLock currentSlot q
-    (e : q) | (slot :: Event -> SlotNo) e > currentSlot -> do
-      when (clientId == 1) $ traceWith tracer (TraceClientTick currentSlot)
-      threadDelay (opts ^. #slotLength)
-      clientEventLoop ackLock snapshotLock (currentSlot + 1) (e : q)
-    (e : q) -> do
-      when (clientId == 1) $ traceWith tracer (TraceClientTick currentSlot)
-      atomically $ takeTMVar ackLock
-      -- Ensure we can only send message to the server if we aren't doing a snapshot.
-      withTMVar_ snapshotLock $ \() -> do
-        sendTo multiplexer serverId (msg e)
-      case msg e of
-        NewTx{} ->
-          pure ()
-        _ ->
-          -- If no transaction was sent, we can put back the lock and process the next event.
-          -- Otherwise, the lock is replaced by the 'clientMain' when processing a 'AckTx'
-          -- message from the server.
-          atomically $ putTMVar ackLock ()
-      clientEventLoop ackLock snapshotLock currentSlot q
 
 data UnexpectedClientMsg = UnexpectedClientMsg NodeId Msg
   deriving (Show)
@@ -621,7 +604,7 @@ stepClient options currentSlot identifier = do
 
   -- NOTE: The distribution is extrapolated from real mainchain data.
   amount <-
-    fmap Ada $
+    fmap (lovelace . (`Ada` 0)) $
       state $
         frequency
           [ (122, randomR (1, 10))
@@ -650,7 +633,7 @@ stepClient options currentSlot identifier = do
     | (predicate, msg) <-
         [
           ( submit
-          , NewTx (mockTx identifier currentSlot (lovelace amount) txSize [recipient])
+          , NewTx (mockTx identifier currentSlot amount txSize [recipient])
           )
         ]
     , predicate
@@ -660,7 +643,6 @@ stepClient options currentSlot identifier = do
 
 data TraceClient
   = TraceClientMultiplexer (TraceMultiplexer Msg)
-  | TraceClientTick SlotNo
   deriving (Show)
 
 --
@@ -677,72 +659,110 @@ data Event = Event
   }
   deriving (Generic, Show)
 
+data TraceEventLoop
+  = TraceEventLoopTick SlotNo
+  | TraceEventLoopTxScheduled (TxRef MockTx)
+  deriving (Show)
+
 data SimulationSummary = SimulationSummary
   { numberOfClients :: !Integer
-  , numberOfEvents :: !Integer
-  , numberOfTransactions :: !NumberOfTransactions
-  , averageTransaction :: !Ada
+  , numberOfTransactions :: !Integer
+  , averageTransaction :: !Lovelace
+  , totalVolume :: !Ada
   , lastSlot :: !SlotNo
   }
   deriving (Generic, Show)
 
-data NumberOfTransactions = NumberOfTransactions
-  { total :: !Integer
-  , belowPaymentWindow :: !Integer
-  , belowHalfOfPaymentWindow :: !Integer
-  , belowTenthOfPaymentWindow :: !Integer
-  }
-  deriving (Generic, Show)
+runEventLoop ::
+  forall m.
+  (MonadAsync m, MonadTimer m) =>
+  Tracer m TraceEventLoop ->
+  RunOptions ->
+  ServerId ->
+  Map ClientId (Client m) ->
+  [Event] ->
+  m ()
+runEventLoop tracer opts serverId clients =
+  withLabel "EventLoop" . loop 0
+ where
+  loop !currentSlot = \case
+    [] ->
+      pure ()
+    (e : q) | (slot :: Event -> SlotNo) e > currentSlot -> do
+      traceWith tracer (TraceEventLoopTick currentSlot)
+      threadDelay (opts ^. #slotLength)
+      loop (currentSlot + 1) (e : q)
+    (e : q) -> do
+      traceWith tracer (TraceEventLoopTick currentSlot)
+      void $
+        async $
+          withLabel ("async-" <> show (slot e) <> "-" <> show (from e)) $ do
+            let Client{multiplexer, ackLock, snapshotLock} = clients ! from e
+            case msg e of
+              NewTx tx -> traceWith tracer (TraceEventLoopTxScheduled (txId tx))
+              _ -> pure ()
+            atomically $ takeTMVar ackLock
+            -- Ensure we can only send message to the server if we aren't doing a snapshot.
+            withTMVar_ snapshotLock $ \() -> do
+              sendTo multiplexer serverId (msg e)
+            case msg e of
+              NewTx{} ->
+                pure ()
+              _ ->
+                -- If no transaction was sent, we can put back the lock and process the next event.
+                -- Otherwise, the lock is replaced by the 'clientMain' when processing a 'AckTx'
+                -- message from the server.
+                atomically $ putTMVar ackLock ()
+      loop currentSlot q
 
 summarizeEvents :: RunOptions -> [Event] -> SimulationSummary
 summarizeEvents RunOptions{paymentWindow} events =
   SimulationSummary
     { numberOfClients
-    , numberOfEvents
     , numberOfTransactions
     , averageTransaction
+    , totalVolume
     , lastSlot
     }
  where
-  numberOfEvents = toInteger $ length events
-  numberOfClients = getNumberOfClients events
-  (volumeTotal, numberOfTransactions) = foldl' count (0, NumberOfTransactions 0 0 0 0) events
+  numberOfClients = toInteger $ fromEnum $ greatestKnownClient events
+  (ada -> totalVolume, numberOfTransactions) = foldl' count (0, 0) events
    where
-    w = maybe 1e99 (asDouble . lovelace) paymentWindow
+    w = fromMaybe (Lovelace $ round @Double @_ 1e99) paymentWindow
     count (!volume, st) = \case
-      (Event _ _ (NewTx MockTx{txAmount})) ->
-        ( volume + if asDouble txAmount <= w then txAmount else 0
-        , st
-            { total =
-                countIf True st total
-            , belowPaymentWindow =
-                countIf (asDouble txAmount <= w) st belowPaymentWindow
-            , belowHalfOfPaymentWindow =
-                countIf (asDouble txAmount <= (w / 2)) st belowHalfOfPaymentWindow
-            , belowTenthOfPaymentWindow =
-                countIf (asDouble txAmount <= (w / 10)) st belowTenthOfPaymentWindow
-            }
-        )
-      _ -> (volume, st)
-    countIf predicate st fn =
-      if predicate then fn st + 1 else fn st
-    asDouble = fromIntegral @_ @Double . unLovelace
+      (Event _ _ (NewTx MockTx{txAmount}))
+        | txAmount <= w ->
+          (volume + txAmount, st + 1)
+      _ ->
+        (volume, st)
   averageTransaction =
-    ada $ Lovelace $ unLovelace volumeTotal `div` (numberOfTransactions ^. #belowPaymentWindow)
+    Lovelace $ unLovelace (lovelace totalVolume) `div` numberOfTransactions
   lastSlot = last events ^. #slot
 
 -- | Calculate simulation time as the last event + twice the settlement delay.
 durationOf :: RunOptions -> [Event] -> DiffTime
-durationOf RunOptions{slotLength, settlementDelay} events =
-  slotLength * fromIntegral (unSlotNo $ (last events ^. #slot) + 2 * settlementDelay)
-
-getNumberOfClients :: [Event] -> Integer
-getNumberOfClients =
-  toInteger . getNodeId . from . maximumBy (\a b -> getNodeId (from a) `compare` getNodeId (from b))
+durationOf RunOptions{slotLength} events =
+  slotLength * fromIntegral (unSlotNo (last events ^. #slot) + 1)
 
 --
 -- Helpers
 --
+
+greatestKnownClient :: [Event] -> ClientId
+greatestKnownClient events =
+  max
+    ( maximum
+        (from <$> events)
+    )
+    ( maximum
+        ( mapMaybe
+            ( \case
+                Event{msg = NewTx MockTx{txRecipients}} -> Just (maximum txRecipients)
+                _ -> Nothing
+            )
+            events
+        )
+    )
 
 getRegion ::
   [AWSCenters] ->

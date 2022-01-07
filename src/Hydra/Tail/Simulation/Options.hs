@@ -55,7 +55,7 @@ import Text.Pretty.Simple (
  )
 
 import Hydra.Tail.Simulation.PaymentWindow (
-  Ada (..),
+  Lovelace (..),
  )
 import Hydra.Tail.Simulation.SlotNo (
   SlotNo (..),
@@ -130,7 +130,7 @@ data RunOptions = RunOptions
   { -- | Slot length
     slotLength :: DiffTime
   , -- | payment window parameter (a.k.a W), that is, the budget of each client before needing a snapshot.
-    paymentWindow :: Maybe Ada
+    paymentWindow :: Maybe Lovelace
   , -- | Number of slots needed for a snapshot to be settled.
     settlementDelay :: SlotNo
   , -- | If and when to pro-actively snapshot as a client, e.g. 0.8 would
@@ -145,12 +145,14 @@ data RunOptions = RunOptions
   }
   deriving (Generic, Show)
 
-newtype AnalyzeOptions = AnalyzeOptions
-  {discardEdges :: Maybe Int}
+data AnalyzeOptions = AnalyzeOptions
+  { discardEdges :: Maybe Int
+  , paymentWindow :: Maybe Lovelace
+  }
   deriving (Generic, Show)
 
 defaultAnalyzeOptions :: AnalyzeOptions
-defaultAnalyzeOptions = AnalyzeOptions Nothing
+defaultAnalyzeOptions = AnalyzeOptions Nothing Nothing
 
 prepareOptionsParser :: Parser PrepareOptions
 prepareOptionsParser =
@@ -200,13 +202,13 @@ slotLengthOption =
       <> showDefault
       <> help "Length of slot in seconds considered for the simulation."
 
-paymentWindowOption :: Parser Ada
+paymentWindowOption :: Parser Lovelace
 paymentWindowOption =
-  fmap Ada $
+  fmap Lovelace $
     option auto $
       mempty
         <> long "payment-window"
-        <> metavar "ADA"
+        <> metavar "Lovelace"
         <> help "Payment window parameter (a.k.a. `W`), that is, the budget of each client before needing a snapshot."
 
 settlementDelayOption :: Parser SlotNo
@@ -309,7 +311,9 @@ clientSubmitLikelihoodOption =
 
 analyzeOptionsParser :: Parser AnalyzeOptions
 analyzeOptionsParser =
-  AnalyzeOptions <$> optional discardEdgesOption
+  AnalyzeOptions
+    <$> optional discardEdgesOption
+    <*> optional paymentWindowOption
 
 discardEdgesOption :: Parser Int
 discardEdgesOption =
