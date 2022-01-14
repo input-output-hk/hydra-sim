@@ -96,7 +96,7 @@ data Analyze = Analyze
   , -- | A measure of how frequent are snapshots on clients. A high coefficient means
     -- that clients usually "see" a lot of volume before it makes a snapshot. A coefficient
     -- close to 1 means that clients do snapshot for almost every transaction.
-    rebalancingCoefficient :: Double
+    rebalancingCoefficient :: Maybe Double
   }
   deriving (Generic, Show)
 
@@ -212,14 +212,12 @@ mkAnalyze AnalyzeOptions{discardEdges, paymentWindow} txs retries snapshots numb
         clients =
           -- NOTE: discarding the first element, because it corresponds to the "ongoing" rebalancing
           -- amount, which may be misleading because it may report a value just after a snapshot (e.g. 0)
-          -- and skew the estimation towards a smaller value. Except... if there's only one value,
-          -- in which case, we are face to a client that has never done any snapshot, and this value
-          -- is relevant,
+          -- and skew the estimation towards a smaller value.
           Map.foldl'
-            (\accum xs -> [fromIntegral x / w | Lovelace x <- tailUnlessSingleton xs] ++ accum)
+            (\accum xs -> [fromIntegral x / w | Lovelace x <- tail xs] ++ accum)
             []
             snapshots
-     in sum clients / fromIntegral (length clients)
+     in if null clients then Nothing else Just (sum clients / fromIntegral (length clients))
 
   confirmationTimes =
     mapMaybe (convertConfirmationTime . snd) . maybeDiscardEdges $ Map.toList txs
@@ -246,8 +244,3 @@ mkAnalyze AnalyzeOptions{discardEdges, paymentWindow} txs retries snapshots numb
     length (filter (< 10) confirmationTimes) `percentOf` numberOfConfirmedTransactions
 
   percentOf a b = (fromIntegral a :: Double) / fromIntegral b
-
-tailUnlessSingleton :: [a] -> [a]
-tailUnlessSingleton = \case
-  [x] -> [x]
-  xs -> tail xs
