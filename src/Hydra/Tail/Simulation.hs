@@ -291,7 +291,7 @@ data Server m = Server
   { multiplexer :: Multiplexer m Msg
   , identifier :: ServerId
   , region :: AWSCenters
-  , registry :: TMVar m (Map ClientId (ClientState, Balance, [Msg]))
+  , registry :: TMVar m (Map ClientId (ClientState, Map Wallet Balance, [Msg]))
   , transactions :: TVar m (Map (TxRef MockTx) (MockTx, ClientId, [ClientId]))
   }
   deriving (Generic)
@@ -322,7 +322,7 @@ newServer identifier clientIds ServerOptions{region, writeCapacity, readCapacity
   -- be _negative_ as part of the simulation.
   clients =
     Map.fromList
-      [ (clientId, (Online, initialBalance 0, mempty))
+      [ (clientId, (Online, emptyWallets, mempty))
       | clientId <- clientIds
       ]
 
@@ -361,7 +361,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
                 (ix, (client, Just NeedSnapshot)) -> do
                   lift $ sendTo multiplexer client NeedSnapshot
                   modifyM $
-                    updateF client $ \(_st, balance, pending) -> do
+                    updateF client $ \(_st, wallets, pending) -> do
                       -- NOTE: This enqueues the message for one (and only one) of the participants.
                       --
                       -- A transaction shall be marked as pending if one of the
@@ -384,7 +384,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
                       --
                       -- Eventually, once all clients are done, it goes through.
                       let pending' = if ix == (0 :: Int) then NewTx tx : pending else pending
-                      pure $ Just (DoingSnapshot, balance, pending')
+                      pure $ Just (DoingSnapshot, wallets, pending')
                 _ -> do
                   pure () -- Already blocked, and snapshot already requested.
         else do
@@ -409,12 +409,12 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
             execStateT $ do
               forM_ (txRecipients tx) $ \recipient -> do
                 modifyM $
-                  updateF recipient $ \(st, balance, pending) -> do
-                    let balance' = modifyCurrent (+ received tx) balance
-                    pure $ Just (st, balance', pending)
+                  updateF recipient $ \(st, wallets, pending) -> do
+                    let wallets' = modifyBalance st (+ received tx) wallets
+                    pure $ Just (st, wallets', pending)
               modifyM $
-                updateF sender $ \(st, balance, pending) -> do
-                  let balance' = modifyCurrent (\x -> x - sent tx) balance
+                updateF sender $ \(st, wallets, pending) -> do
+                  let wallets' = modifyBalance st (\x -> x - sent tx) wallets
 
                   -- Check whether we should send 'NeedSnapshot' for pro-active
                   -- snapshotting (after the tx). Logically this would be done on the
@@ -422,20 +422,23 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
                   -- server for now.
                   st' <- do
                     sendTo multiplexer sender (AckTx tx)
-                    if inProactiveSnapshotLimit options balance'
-                      then do
+                    case anyInProactiveSnapshotLimit options wallets' of
+                      Nothing ->
+                        pure st
+                      -- TODO: Require snapshot of the right wallet.
+                      Just{} -> do
                         sendTo multiplexer clientId NeedSnapshot
                         pure DoingSnapshot
-                      else do
-                        pure st
 
-                  pure $ Just (st', balance', pending)
+                  pure $ Just (st', wallets', pending)
     (clientId, SnapshotDone) -> do
       pending <- withTMVar registry $ \clients -> do
         case Map.lookup clientId clients of
           Nothing -> pure ([], clients)
-          Just (_st, Balance{current}, pending) -> do
-            let clients' = Map.insert clientId (Online, initialBalance current, []) clients
+          Just (_st, wallets, pending) -> do
+            -- TODO: get wallet from 'SnapshotDone' message.
+            let wallets' = Map.adjust (\Balance{current} -> initialBalance current) FstWallet wallets
+            let clients' = Map.insert clientId (Online, wallets', []) clients
             pure (pending, clients')
       mapM_ handleMessage (reverse $ (clientId,) <$> pending)
     (clientId, msg) ->
@@ -453,11 +456,11 @@ matchBlocked ::
   Maybe Lovelace ->
   (ClientId, MockTx) ->
   ClientId ->
-  (ClientState, Balance, pending) ->
+  (ClientState, Map Wallet Balance, pending) ->
   f (Maybe (ClientId, Maybe Msg))
 matchBlocked Nothing _ _ _ =
   pure Nothing
-matchBlocked (Just paymentWindow) (sender, tx) clientId (st, balance, _)
+matchBlocked (Just paymentWindow) (sender, tx) clientId (st, wallets, _)
   | clientId `elem` txRecipients tx =
     case (st, viewPaymentWindow paymentWindow balance (received tx)) of
       (DoingSnapshot, _) ->
@@ -476,6 +479,15 @@ matchBlocked (Just paymentWindow) (sender, tx) clientId (st, balance, _)
         pure Nothing
   | otherwise =
     pure Nothing
+ where
+  -- TODO
+  balance = wallets ! FstWallet
+
+anyInProactiveSnapshotLimit :: RunOptions -> Map Wallet Balance -> Maybe Wallet
+anyInProactiveSnapshotLimit opts wallets =
+  case Map.toList (Map.filter (inProactiveSnapshotLimit opts) wallets) of
+    [] -> Nothing
+    (w, _) : _ -> Just w
 
 inProactiveSnapshotLimit :: RunOptions -> Balance -> Bool
 inProactiveSnapshotLimit RunOptions{paymentWindow, proactiveSnapshot} Balance{initial, current} =
@@ -517,6 +529,25 @@ type ClientId = NodeId
 
 data ClientState = Online | DoingSnapshot
   deriving (Generic, Show, Eq)
+
+data Wallet = FstWallet | SndWallet
+  deriving (Generic, Show, Eq, Ord)
+
+emptyWallets :: Map Wallet Balance
+emptyWallets =
+  Map.fromList
+    [ (FstWallet, initialBalance 0)
+    , (SndWallet, initialBalance 0)
+    ]
+
+modifyBalance ::
+  ClientState ->
+  (Lovelace -> Lovelace) ->
+  Map Wallet Balance ->
+  Map Wallet Balance
+modifyBalance _st fn =
+  -- TODO: Select the right wallet to modify based on the state.
+  Map.adjust (modifyCurrent fn) FstWallet
 
 data Client m = Client
   { multiplexer :: Multiplexer m Msg
