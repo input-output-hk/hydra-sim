@@ -126,7 +126,7 @@ analyzeSimulation options notify trace = do
         fn = \case
           (_threadLabel, _, TraceServer (TraceServerMultiplexer (MPRecvTrailing _clientId NewTx{}))) ->
             (\(!m, !r, !sn, !rt, !sl) -> pure (m, r, sn, rt + 1, sl))
-          (_threadLabel, _, TraceServer (TraceServerMultiplexer (MPRecvTrailing clientId SnapshotDone))) ->
+          (_threadLabel, _, TraceServer (TraceServerMultiplexer (MPRecvTrailing clientId SnapshotDone{}))) ->
             (\(!m, !r, !sn, !rt, !sl) -> pure (m, r, Map.adjust (0 :) clientId sn, rt, sl))
           (_threadLabel, _, TraceServer (TraceTransactionBlocked ref)) ->
             ( \(!m, !r, !sn, !rt, !sl) ->

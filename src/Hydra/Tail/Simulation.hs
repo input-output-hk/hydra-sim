@@ -15,6 +15,7 @@ import Control.Monad (
   forM,
   forM_,
   forever,
+  guard,
   join,
   void,
  )
@@ -34,7 +35,9 @@ import Control.Monad.Class.MonadSTM (
   newTVarIO,
   putTMVar,
   readTVar,
+  retry,
   takeTMVar,
+  tryTakeTMVar,
   writeTVar,
  )
 import Control.Monad.Class.MonadThrow (
@@ -75,6 +78,7 @@ import Data.Generics.Labels ()
 import Data.List (
   delete,
   foldl',
+  nub,
  )
 import Data.Map (
   (!),
@@ -244,7 +248,7 @@ data Msg
     -- main chain and model this behavior.
     NewTx !MockTx
   | -- | Notify the server that a snapshot was performed.
-    SnapshotDone
+    SnapshotDone !Wallet
   | --
     -- ↓↓↓ Server messages ↓↓↓
     --
@@ -254,7 +258,7 @@ data Msg
     -- out of scope and will be explored at a later stage.
     NotifyTx !MockTx
   | -- | The server requests a client to perform a snapshot.
-    NeedSnapshot
+    NeedSnapshot !Wallet
   | -- | The server replies to each client submitting a transaction with an acknowledgement.
     AckTx !MockTx
   deriving (Generic, Show)
@@ -347,50 +351,58 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
       -- Some of the recipients or the sender may be out of their payment window
       -- (i.e. 'DoingSnapshot'), if that's the case, we cannot process the transaction
       -- until they are done.
-      blocked <- withTMVar registry $ \clients ->
-        (,clients)
-          <$> Map.traverseMaybeWithKey
-            (matchBlocked (options ^. #paymentWindow) (clientId, tx))
-            clients
-      if not (null blocked)
-        then do
-          traceWith tracer (TraceTransactionBlocked (txId tx))
-          withTMVar_ registry $
-            execStateT $ do
-              forM_ (zip [0 ..] (Map.elems blocked)) $ \case
-                (ix, (client, Just NeedSnapshot)) -> do
-                  lift $ sendTo multiplexer client NeedSnapshot
-                  modifyM $
-                    updateF client $ \(_st, wallets, pending) -> do
-                      -- NOTE: This enqueues the message for one (and only one) of the participants.
-                      --
-                      -- A transaction shall be marked as pending if one of the
-                      -- participants (sender or recipients) is blocked (doing snapshot).
-                      --
-                      -- There's no "ledger" on the server, so if we re-enqueue a transaction
-                      -- for each blocked participant, we may replay the transaction more than once!
-                      --
-                      -- Thus, it is sufficient (and necessary) to re-enqueue the transaction only
-                      -- once, for one of the participant. Once that participant is done
-                      -- snapshotting, the transaction will eventually be retried and from here we
-                      -- really have two scenarios:
-                      --
-                      -- a) That client happened to be the last one in the transaction which had
-                      --    to snapshot, and the transaction can now proceed.
-                      --
-                      -- b) There's another client which is still blocked. Then, the transaction
-                      --    will be re-enqueued again, for that client (or at least, for the first
-                      --    other block client).
-                      --
-                      -- Eventually, once all clients are done, it goes through.
-                      let pending' = if ix == (0 :: Int) then NewTx tx : pending else pending
-                      pure $ Just (DoingSnapshot, wallets, pending')
-                _ -> do
-                  pure () -- Already blocked, and snapshot already requested.
-        else do
+      clientStatuses <- fmap Map.toList $
+        withTMVar registry $ \clients ->
+          (,clients)
+            <$> Map.traverseMaybeWithKey
+              (evaluateClient (options ^. #paymentWindow) (clientId, tx))
+              clients
+
+      withTMVar_ registry $
+        execStateT $
+          forM_ clientStatuses $ \case
+            (clientId, ShouldRequestSnapshot _ (Just w)) -> do
+              lift $ sendTo multiplexer clientId $ NeedSnapshot w
+              modifyM $
+                updateF clientId $ \(st, wallets, pending) -> do
+                  pure $ Just (doingSnapshot w st, wallets, pending)
+            _ ->
+              pure ()
+
+      case mapMaybe matchBlocked clientStatuses of
+        [] -> do
           atomically $ modifyTVar' transactions $ Map.insert (txRef tx) (tx, clientId, txRecipients tx)
           forM_ (txRecipients tx) $ \recipient -> do
             sendTo multiplexer recipient (NotifyTx tx)
+        (clientId : _) -> do
+          -- NOTE: This enqueues the message for one (and only one) of the participants.
+          -- who's currently blocked (there can be more than one).
+          --
+          -- A transaction shall be marked as pending if one of the
+          -- participants (sender or recipients) is blocked (doing snapshot).
+          --
+          -- There's no "ledger" on the server, so if we re-enqueue a transaction
+          -- for each blocked participant, we may replay the transaction more than once!
+          --
+          -- Thus, it is sufficient (and necessary) to re-enqueue the transaction only
+          -- once, for one of the participant. Once that participant is done
+          -- snapshotting, the transaction will eventually be retried and from here we
+          -- really have two scenarios:
+          --
+          -- a) That client happened to be the last one in the transaction which had
+          --    to snapshot, and the transaction can now proceed.
+          --
+          -- b) There's another client which is still blocked. Then, the transaction
+          --    will be re-enqueued again, for that client (or at least, for the first
+          --    other block client).
+          --
+          -- Eventually, once all clients are done, it goes through.
+          traceWith tracer (TraceTransactionBlocked (txId tx))
+          withTMVar_ registry $
+            execStateT $
+              modifyM $
+                updateF clientId $ \(st, wallets, pending) -> do
+                  pure $ Just (st, wallets, NewTx tx : pending)
     (clientId, AckTx ack) -> do
       let ackTx = \case
             Nothing -> (Nothing, Nothing)
@@ -425,24 +437,31 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
                     case anyInProactiveSnapshotLimit options wallets' of
                       Nothing ->
                         pure st
-                      -- TODO: Require snapshot of the right wallet.
-                      Just{} -> do
-                        sendTo multiplexer clientId NeedSnapshot
-                        pure DoingSnapshot
+                      Just w -> do
+                        sendTo multiplexer clientId $ NeedSnapshot w
+                        pure $ doingSnapshot w st
 
                   pure $ Just (st', wallets', pending)
-    (clientId, SnapshotDone) -> do
+    (clientId, SnapshotDone w) -> do
       pending <- withTMVar registry $ \clients -> do
         case Map.lookup clientId clients of
           Nothing -> pure ([], clients)
           Just (_st, wallets, pending) -> do
-            -- TODO: get wallet from 'SnapshotDone' message.
-            let wallets' = Map.adjust (\Balance{current} -> initialBalance current) FstWallet wallets
+            let wallets' = Map.adjust (\Balance{current} -> initialBalance current) w wallets
             let clients' = Map.insert clientId (Online, wallets', []) clients
             pure (pending, clients')
       mapM_ handleMessage (reverse $ (clientId,) <$> pending)
     (clientId, msg) ->
       throwIO (UnexpectedServerMsg clientId msg)
+
+data ShouldRequestSnapshot = ShouldRequestSnapshot
+  { isBlocked :: Bool
+  , wallet :: Maybe Wallet
+  }
+
+matchBlocked :: (ClientId, ShouldRequestSnapshot) -> Maybe ClientId
+matchBlocked (clientId, ShouldRequestSnapshot{isBlocked}) =
+  clientId <$ guard isBlocked
 
 -- | Return 'f (Just ClientId)' iif a client would exceed (bottom or top) its payment window
 -- from the requested payment, or if it's already performing a snapshot.
@@ -451,37 +470,52 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
 -- of the _sender_. So the amount corresponds to how much did the sender "lost" in the
 -- transaction, but, there can be multiple recipients! Irrespective of this, we consider
 -- in the simulation that *each* recipient receives the full amount.
-matchBlocked ::
+evaluateClient ::
   Applicative f =>
   Maybe Lovelace ->
   (ClientId, MockTx) ->
   ClientId ->
   (ClientState, Map Wallet Balance, pending) ->
-  f (Maybe (ClientId, Maybe Msg))
-matchBlocked Nothing _ _ _ =
+  f (Maybe ShouldRequestSnapshot)
+evaluateClient Nothing _ _ _ =
   pure Nothing
-matchBlocked (Just paymentWindow) (sender, tx) clientId (st, wallets, _)
-  | clientId `elem` txRecipients tx =
-    case (st, viewPaymentWindow paymentWindow balance (received tx)) of
-      (DoingSnapshot, _) ->
-        pure (Just (clientId, Nothing))
-      (_, OutOfPaymentWindow) ->
-        pure (Just (clientId, Just NeedSnapshot))
-      (_, InPaymentWindow) ->
-        pure Nothing
-  | clientId == sender =
-    case (st, viewPaymentWindow paymentWindow balance (negate $ sent tx)) of
-      (DoingSnapshot, _) ->
-        pure (Just (clientId, Nothing))
-      (_, OutOfPaymentWindow) ->
-        pure (Just (clientId, Just NeedSnapshot))
-      (_, InPaymentWindow) ->
-        pure Nothing
-  | otherwise =
-    pure Nothing
+evaluateClient (Just paymentWindow) (sender, tx) clientId (st, wallets, _) =
+  case (mAmount, st) of
+    (Just{}, DoingSnapshot ws)
+      | all (`elem` ws) [FstWallet, SndWallet] ->
+        pure $ Just $ ShouldRequestSnapshot True Nothing
+    (Just amount, DoingSnapshot [FstWallet]) ->
+      case viewPaymentWindow paymentWindow (wallets ! SndWallet) amount of
+        OutOfPaymentWindow ->
+          pure $ Just $ ShouldRequestSnapshot True (Just SndWallet)
+        InPaymentWindow ->
+          pure Nothing
+    (Just amount, DoingSnapshot [SndWallet]) ->
+      case viewPaymentWindow paymentWindow (wallets ! FstWallet) amount of
+        OutOfPaymentWindow ->
+          pure $ Just $ ShouldRequestSnapshot True (Just FstWallet)
+        InPaymentWindow ->
+          pure Nothing
+    (Just amount, _) ->
+      case viewPaymentWindow paymentWindow (wallets ! FstWallet) amount of
+        OutOfPaymentWindow ->
+          case viewPaymentWindow paymentWindow (wallets ! SndWallet) amount of
+            OutOfPaymentWindow ->
+              pure $ Just $ ShouldRequestSnapshot True (Just FstWallet)
+            InPaymentWindow ->
+              pure $ Just $ ShouldRequestSnapshot False (Just FstWallet)
+        InPaymentWindow ->
+          pure Nothing
+    (Nothing, _) ->
+      pure Nothing
  where
-  -- TODO
-  balance = wallets ! FstWallet
+  mAmount
+    | clientId `elem` txRecipients tx =
+      Just $ negate (sent tx)
+    | clientId == sender =
+      Just $ received tx
+    | otherwise =
+      Nothing
 
 anyInProactiveSnapshotLimit :: RunOptions -> Map Wallet Balance -> Maybe Wallet
 anyInProactiveSnapshotLimit opts wallets =
@@ -527,11 +561,16 @@ instance Exception UnknownClient
 
 type ClientId = NodeId
 
-data ClientState = Online | DoingSnapshot
+data ClientState = Online | DoingSnapshot [Wallet]
   deriving (Generic, Show, Eq)
 
+doingSnapshot :: Wallet -> ClientState -> ClientState
+doingSnapshot w = \case
+  Online -> DoingSnapshot [w]
+  DoingSnapshot ws -> DoingSnapshot (nub $ w : ws)
+
 data Wallet = FstWallet | SndWallet
-  deriving (Generic, Show, Eq, Ord)
+  deriving (Generic, Show, Eq, Ord, Enum, Bounded)
 
 emptyWallets :: Map Wallet Balance
 emptyWallets =
@@ -545,22 +584,33 @@ modifyBalance ::
   (Lovelace -> Lovelace) ->
   Map Wallet Balance ->
   Map Wallet Balance
-modifyBalance _st fn =
-  -- TODO: Select the right wallet to modify based on the state.
-  Map.adjust (modifyCurrent fn) FstWallet
+modifyBalance st fn =
+  case st of
+    Online ->
+      Map.adjust (modifyCurrent fn) FstWallet
+    DoingSnapshot ws
+      | FstWallet `elem` ws ->
+        Map.adjust (modifyCurrent fn) SndWallet
+    _ ->
+      Map.adjust (modifyCurrent fn) FstWallet
 
 data Client m = Client
   { multiplexer :: Multiplexer m Msg
   , identifier :: ClientId
   , region :: AWSCenters
   , ackLock :: TMVar m ()
-  , snapshotLock :: TMVar m ()
+  , snapshotLocks :: Map Wallet (TMVar m ())
   }
   deriving (Generic)
 
 newClient :: MonadSTM m => ClientId -> m (Client m)
 newClient identifier = do
-  snapshotLock <- newTMVarIO ()
+  snapshotLocks <-
+    Map.fromList
+      <$> sequence
+        [ (FstWallet,) <$> newTMVarIO ()
+        , (SndWallet,) <$> newTMVarIO ()
+        ]
   ackLock <- newTMVarIO ()
   multiplexer <-
     newMultiplexer
@@ -569,7 +619,7 @@ newClient identifier = do
       inboundBufferSize
       (capacity $ kbitsPerSecond 512)
       (capacity $ kbitsPerSecond 512)
-  return Client{multiplexer, identifier, region, ackLock, snapshotLock}
+  return Client{multiplexer, identifier, region, ackLock, snapshotLocks}
  where
   outboundBufferSize = 1000
   inboundBufferSize = 1000
@@ -589,7 +639,7 @@ runClient ::
   RunOptions ->
   Client m ->
   m ()
-runClient tracer serverId opts Client{multiplexer, identifier, ackLock, snapshotLock} = do
+runClient tracer serverId opts Client{multiplexer, identifier, ackLock, snapshotLocks} = do
   concurrently_
     (startMultiplexer (contramap TraceClientMultiplexer tracer) multiplexer)
     (withLabel ("Client: " <> show identifier) $ forever clientMain)
@@ -605,12 +655,13 @@ runClient tracer serverId opts Client{multiplexer, identifier, ackLock, snapshot
         atomically $ putTMVar ackLock ()
       (_, NotifyTx tx) ->
         sendTo multiplexer serverId (AckTx tx)
-      (_, NeedSnapshot{}) -> do
-        -- NOTE: Holding on the MVar here prevents the client's event loop from
-        -- processing any new event. The other will block until the snapshot is done.
-        withTMVar_ snapshotLock $ \() -> do
-          threadDelay settlementDelay_
-          sendTo multiplexer serverId SnapshotDone
+      (_, NeedSnapshot w) -> do
+        void $
+          async $
+            withLabel ("client " <> show identifier <> " snapshotting " <> show w) $
+              withTMVar_ (snapshotLocks ! w) $ \() -> do
+                threadDelay settlementDelay_
+                sendTo multiplexer serverId (SnapshotDone w)
       (nodeId, msg) ->
         throwIO $ UnexpectedClientMsg nodeId msg
    where
@@ -728,22 +779,37 @@ runEventLoop tracer opts serverId clients =
       void $
         async $
           withLabel ("async-" <> show (slot e) <> "-" <> show (from e)) $ do
-            let Client{multiplexer, ackLock, snapshotLock} = clients ! from e
+            let Client{multiplexer, ackLock, snapshotLocks} = clients ! from e
             case msg e of
               NewTx tx -> traceWith tracer (TraceEventLoopTxScheduled (txId tx))
               _ -> pure ()
             atomically $ takeTMVar ackLock
+
             -- Ensure we can only send message to the server if we aren't doing a snapshot.
-            withTMVar_ snapshotLock $ \() -> do
-              sendTo multiplexer serverId (msg e)
+            w <- atomically $ do
+              mLockFst <- tryTakeTMVar (snapshotLocks ! FstWallet)
+              mLockSnd <- tryTakeTMVar (snapshotLocks ! SndWallet)
+              case (mLockFst, mLockSnd) of
+                (Nothing, Nothing) ->
+                  retry
+                (Nothing, Just ()) ->
+                  pure SndWallet
+                (Just (), Nothing) ->
+                  pure FstWallet
+                (Just (), Just ()) ->
+                  FstWallet <$ putTMVar (snapshotLocks ! SndWallet) ()
+            sendTo multiplexer serverId (msg e)
+            atomically $ putTMVar (snapshotLocks ! w) ()
+
+            -- If no transaction was sent, we can put back the ack lock and process the next event.
+            -- Otherwise, the lock is replaced by the 'clientMain' when processing a 'AckTx'
+            -- message from the server.
             case msg e of
               NewTx{} ->
                 pure ()
               _ ->
-                -- If no transaction was sent, we can put back the lock and process the next event.
-                -- Otherwise, the lock is replaced by the 'clientMain' when processing a 'AckTx'
-                -- message from the server.
                 atomically $ putTMVar ackLock ()
+
       loop currentSlot q
 
 summarizeEvents :: RunOptions -> [Event] -> SimulationSummary
