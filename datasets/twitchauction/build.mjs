@@ -75,7 +75,7 @@ fs.createReadStream(INPUT_FILENAME)
             source = edge.b;
             target = edge.a;
           }
-          const ev = [sl, source, "new-tx", pt.getPrice(), someAmount(PROACTIVE_SNAPSHOT), target].join(",")
+          const ev = [sl, source, "new-tx", someSize(), pt.getPrice(), target].join(",")
           writer.write(ev);
         }
     }
