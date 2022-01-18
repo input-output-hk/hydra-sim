@@ -14,7 +14,7 @@ export function buildPriceTable(filepath) {
   for (let i = 0; i < t.length; i++) {
     while (j <  t[i][2]) { // price counts
      // console.log(" i=" + i + "; j=" + j + "; price: " + t[i][0] + ", mult: " + t[i][2]);
-     tab[j] = t[i][0]; // price
+     tab[j] = Number(t[i][0]); // price
      j++;
     }
   }
