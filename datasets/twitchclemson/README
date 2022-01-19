@@ -1,0 +1,24 @@
+Spending-Transparency Data from Clemson University (SC, USA)
+
+- Extracted all records with vendor/payee "American Express" expenses from Clemson reporting for 2020 published at
+  https://transpend.app.clemson.edu/transparency-spending/vendor/search/
+
+  (scraped by hand per month and pages --- as they have no better options)
+
+  -> file clemson2020.csv (tab separated)
+
+clemson.xlsx
+- imported clemson2020.csv
+- Deleted all negative amounts (credits) as not relatable to respective debits
+- the graphs show the number of transaction per amount up to USD 500,
+  once rounded to 1 USD, once rounded to 5 USD.
+
+
+Exported all transactions with amounts from USD 0 to USD 100 while, rounding the amounts to USD integer
+  -> file clemsonDistribution.csv (705 records)
+
+Built "duration" file
+
+Extracted first 1000 amounts in "duration" file into sampledFromDuration.csv (verifyDistribution.awk)
+
+Plotted result in clemson.xlsx (third graph)
