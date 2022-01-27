@@ -12,11 +12,8 @@ export function buildPriceTable(filepath) {
   const tab = [];
   let t = readPriceTable(filepath);
   let j = 0;
-  console.log("table length: " + t.length);
-  console.log(t[t.length-1]);
   for (let i = 0; i < t.length; i++) {
     while (j <  t[i][2]) { // price counts
-     // console.log(" i=" + i + "; j=" + j + "; price: " + t[i][0] + ", mult: " + t[i][2]);
      tab[j] = Number(t[i][0]); // price
      j++;
     }
