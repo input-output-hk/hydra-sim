@@ -9,8 +9,7 @@
  * Available ENV vars:
  *
  *     DURATION   Duration of the simulation, in seconds [default: 3600]
- *     TPS        Target TPS for the simulation (i.e. number of event per step) [default: 250]
- *     PROACTIVE  Pro-active snapshot parameter (i.e. 's') [default: 1]
+ *     TPH        Target throughput per hour PER CLIENT  [default: 3]
  */
 
 import fs from "fs";
@@ -24,17 +23,21 @@ import
   , someSize
   , __dirname
   } from "../helpers.mjs";
+import
+  { buildPriceTable
+  } from "../twitchclemson/myhelpers.mjs";
 
-const INPUT_FILENAME = path.join(__dirname, "twitter.mjs", "source.csv");
+const INPUT_FILENAME = path.join(__dirname, "twitter", "source.csv");
 const DURATION = parseInt(process.env["DURATION"] || "3600", 10);
-const TARGET_TPS = parseInt(process.env["TPS"] || "250", 10);
-const PROACTIVE_SNAPSHOT = Number(process.env["PROACTIVE"] || "1");
-const OUTPUT_FILENAME = path.join(path.dirname(INPUT_FILENAME), `duration:${DURATION}-tps:${TARGET_TPS}-proActive:${PROACTIVE_SNAPSHOT}.csv`)
+const TARGET_TPH = Number(process.env["TPH"] || "1");
+const OUTPUT_FILENAME = path.join(path.dirname(INPUT_FILENAME), `duration:${DURATION}-tph:${TARGET_TPH}.csv`)
+const PRICE_TABLE_FILENAME = path.join(__dirname, "twitchclemson", "clemsonDistribution.csv");
 
-console.log(`DURATION:  ${DURATION}`);
-console.log(`TPS:       ${TARGET_TPS}`);
-console.log(`PROACTIVE: ${PROACTIVE_SNAPSHOT}`);
+console.log(`DURATION:   ${DURATION}s`);
+console.log(`THROUGHPUT: ${TARGET_TPH} txs per client per hour.`);
 console.log("");
+
+const pt = buildPriceTable(PRICE_TABLE_FILENAME);
 
 const graph = [];
 const nodes = new Map();
@@ -44,27 +47,24 @@ fs.createReadStream(INPUT_FILENAME)
     if (!nodes.has(cols[0])) { nodes.set(cols[0], ix += 1); }
     if (!nodes.has(cols[1])) { nodes.set(cols[1], ix += 1); }
     graph.push({
-      source: nodes.get(cols[0]),
-      target: nodes.get(cols[1])
-    })
+      source: Number(nodes.get(cols[0])),
+      target: Number(nodes.get(cols[1]))
+    });
   }))
   .on('finish', () => {
     console.log(`Processed graph with ${graph.length} edges & ${nodes.size} nodes!`)
     const writer = csvWriter(OUTPUT_FILENAME);
     writer.write("slot,clientId,event,size,amount,recipients");
-    process.stdout.write("Generating events");
+    const TARGET_TPS = Math.round(TARGET_TPH * nodes.size / 3600);
+    process.stdout.write(`Generating events at a rate of ${TARGET_TPS} TPS.`);
     for (let sl = 0; sl < DURATION; sl += 1) {
         if (sl % 10 === 0) { process.stdout.write(".") }
         for (let k = 0; k < TARGET_TPS; k += 1) {
           const edge = pickOne(graph);
-          const ev = [sl, edge.source, "new-tx", someSize(), someAmount(PROACTIVE_SNAPSHOT), edge.target].join(",")
+          const ev = [sl, edge.source, "new-tx", someSize(), pt.getPrice(), edge.target].join(",")
           writer.write(ev);
         }
     }
     process.stdout.write(`\n\nDone → ${OUTPUT_FILENAME}\n`);
     writer.end();
   });
-
-function asc(k) {
-  return (a,b) => a[k] - b[k];
-}

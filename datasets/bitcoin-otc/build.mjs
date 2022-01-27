@@ -29,7 +29,7 @@ import
 
 const INPUT_FILENAME = path.join(__dirname, "bitcoin-otc", "source.csv");
 const DURATION = parseInt(process.env["DURATION"] || "3600", 10);
-const TARGET_TPH = parseInt(process.env["TPH"] || "3", 10);
+const TARGET_TPH = Number(process.env["TPH"] || "1");
 const OUTPUT_FILENAME = path.join(path.dirname(INPUT_FILENAME), `duration:${DURATION}-tph:${TARGET_TPH}.csv`)
 const PRICE_TABLE_FILENAME = path.join(__dirname, "twitchclemson", "clemsonDistribution.csv");
 
