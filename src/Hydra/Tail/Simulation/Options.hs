@@ -138,6 +138,8 @@ data RunOptions = RunOptions
     proactiveSnapshot :: Maybe Double
   , -- | Fraction of the window budget which fixes the maximum admissible payment. 0.5 means that we discard any transaction which is bigger than half the payment window.
     paymentCutOff :: Double
+  , -- | Whether each client should use two wallets with independent snapshot cycles
+    enableBackupWallet :: Bool
   , -- | Whether to print progress and additional information.
     verbosity :: Verbosity
   , -- | Options specific to the 'Server'
@@ -190,6 +192,7 @@ runOptionsParser =
     <*> settlementDelayOption
     <*> optional proactiveSnapshotOption
     <*> paymentCutOffOption
+    <*> withBackupWalletFlag
     <*> verbosityFlag
     <*> serverOptionsOption
 
@@ -240,6 +243,14 @@ paymentCutOffOption =
       <> value 1.0
       <> showDefault
       <> help "Fraction of the window budget which fixes the maximum admissible payment. 0.5 means that we discard any transaction which is bigger than half the payment window."
+
+withBackupWalletFlag :: Parser Bool
+withBackupWalletFlag =
+  flag False True $
+    mempty
+      <> long "with-backup-wallet"
+      <> showDefault
+      <> help "Enable a 2nd backup wallets for each client."
 
 verbosityFlag :: Parser Verbosity
 verbosityFlag =

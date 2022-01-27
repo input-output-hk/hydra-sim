@@ -355,7 +355,7 @@ runServer tracer options Server{multiplexer, registry, transactions} = do
         withTMVar registry $ \clients ->
           (,clients)
             <$> Map.traverseMaybeWithKey
-              (evaluateClient (options ^. #paymentWindow) (clientId, tx))
+              (evaluateClient (options ^. #enableBackupWallet) (options ^. #paymentWindow) (clientId, tx))
               clients
 
       withTMVar_ registry $
@@ -472,42 +472,56 @@ matchBlocked (clientId, ShouldRequestSnapshot{isBlocked}) =
 -- in the simulation that *each* recipient receives the full amount.
 evaluateClient ::
   Applicative f =>
+  Bool ->
   Maybe Lovelace ->
   (ClientId, MockTx) ->
   ClientId ->
   (ClientState, Map Wallet Balance, pending) ->
   f (Maybe ShouldRequestSnapshot)
-evaluateClient Nothing _ _ _ =
+evaluateClient _ Nothing _ _ _ =
   pure Nothing
-evaluateClient (Just paymentWindow) (sender, tx) clientId (st, wallets, _) =
-  case (mAmount, st) of
-    (Just{}, DoingSnapshot ws)
-      | all (`elem` ws) [FstWallet, SndWallet] ->
+evaluateClient useSndWallet (Just paymentWindow) (sender, tx) clientId (st, wallets, _)
+  | useSndWallet =
+    case (mAmount, st) of
+      (Just{}, DoingSnapshot ws)
+        | all (`elem` ws) [FstWallet, SndWallet] ->
+          pure $ Just $ ShouldRequestSnapshot True Nothing
+      (Just amount, DoingSnapshot [FstWallet]) ->
+        case viewPaymentWindow paymentWindow (wallets ! SndWallet) amount of
+          OutOfPaymentWindow ->
+            pure $ Just $ ShouldRequestSnapshot True (Just SndWallet)
+          InPaymentWindow ->
+            pure Nothing
+      (Just amount, DoingSnapshot [SndWallet]) ->
+        case viewPaymentWindow paymentWindow (wallets ! FstWallet) amount of
+          OutOfPaymentWindow ->
+            pure $ Just $ ShouldRequestSnapshot True (Just FstWallet)
+          InPaymentWindow ->
+            pure Nothing
+      (Just amount, _) ->
+        case viewPaymentWindow paymentWindow (wallets ! FstWallet) amount of
+          OutOfPaymentWindow ->
+            case viewPaymentWindow paymentWindow (wallets ! SndWallet) amount of
+              OutOfPaymentWindow ->
+                pure $ Just $ ShouldRequestSnapshot True (Just FstWallet)
+              InPaymentWindow ->
+                pure $ Just $ ShouldRequestSnapshot False (Just FstWallet)
+          InPaymentWindow ->
+            pure Nothing
+      (Nothing, _) ->
+        pure Nothing
+  | otherwise =
+    case (mAmount, st) of
+      (Just{}, DoingSnapshot{}) ->
         pure $ Just $ ShouldRequestSnapshot True Nothing
-    (Just amount, DoingSnapshot [FstWallet]) ->
-      case viewPaymentWindow paymentWindow (wallets ! SndWallet) amount of
-        OutOfPaymentWindow ->
-          pure $ Just $ ShouldRequestSnapshot True (Just SndWallet)
-        InPaymentWindow ->
-          pure Nothing
-    (Just amount, DoingSnapshot [SndWallet]) ->
-      case viewPaymentWindow paymentWindow (wallets ! FstWallet) amount of
-        OutOfPaymentWindow ->
-          pure $ Just $ ShouldRequestSnapshot True (Just FstWallet)
-        InPaymentWindow ->
-          pure Nothing
-    (Just amount, _) ->
-      case viewPaymentWindow paymentWindow (wallets ! FstWallet) amount of
-        OutOfPaymentWindow ->
-          case viewPaymentWindow paymentWindow (wallets ! SndWallet) amount of
-            OutOfPaymentWindow ->
-              pure $ Just $ ShouldRequestSnapshot True (Just FstWallet)
-            InPaymentWindow ->
-              pure $ Just $ ShouldRequestSnapshot False (Just FstWallet)
-        InPaymentWindow ->
-          pure Nothing
-    (Nothing, _) ->
-      pure Nothing
+      (Just amount, Online) ->
+        case viewPaymentWindow paymentWindow (wallets ! FstWallet) amount of
+          OutOfPaymentWindow ->
+            pure $ Just $ ShouldRequestSnapshot True (Just FstWallet)
+          InPaymentWindow ->
+            pure Nothing
+      (Nothing, _) ->
+        pure Nothing
  where
   mAmount
     | clientId `elem` txRecipients tx =
@@ -789,7 +803,10 @@ runEventLoop tracer opts serverId clients =
             -- Ensure we can only send message to the server if we aren't doing a snapshot.
             w <- atomically $ do
               mLockFst <- tryTakeTMVar (snapshotLocks ! FstWallet)
-              mLockSnd <- tryTakeTMVar (snapshotLocks ! SndWallet)
+              mLockSnd <-
+                if opts ^. #enableBackupWallet
+                  then tryTakeTMVar (snapshotLocks ! SndWallet)
+                  else pure Nothing
               case (mLockFst, mLockSnd) of
                 (Nothing, Nothing) ->
                   retry
