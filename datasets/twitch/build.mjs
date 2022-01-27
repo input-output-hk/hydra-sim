@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-/* Generate a T2P2 dataset from the "Twitch Gamers Social Network" dataset ().
+/* Generate a T2P2 dataset from the "Twitch Gamers Social Network" dataset (https://snap.stanford.edu/data/twitch_gamers.html).
  *
  * Usage:
  *     ./build.mjs

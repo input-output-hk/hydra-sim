@@ -28,6 +28,7 @@ await
   , [path.join(__dirname, "plots", "recipients.svg"), recipients]
   , [path.join(__dirname, "plots", "volume-usd.svg"), volume]
   , [path.join(__dirname, "plots", "density.svg"), density]
+  , [path.join(__dirname, "plots", "idle.svg"), idle]
   , [path.join(__dirname, "plots", "received-vs-sent.svg"), receivedVsSent]
   ].forEach(async ([filepath, fn]) => {
     console.log(`Plotting: ${filepath}`);
@@ -54,6 +55,9 @@ fs.writeFileSync(outputFile, `<blockquote><i>generated from: \`${inputFile}\`</i
 
 <h3>density</h3>
 <img src="density.svg">
+
+<h3>idle</h3>
+<img src="idle.svg">
 `);
 
 console.log(`Done → ${outputFile}`);
@@ -297,6 +301,89 @@ async function density(events) {
       labels,
       datasets: [{
         label: "number of transactions",
+        fill: true,
+        backgroundColor: "#f8c291",
+        data,
+      }],
+    },
+  };
+
+  return chartJSNodeCanvas.renderToBuffer(configuration);
+}
+
+async function idle(events) {
+  // - Assume events ordered by slot
+  // - In each event check whether the involved parties are idle for the next x slots
+  // - sum idle parties and plot them per slot
+
+  const nextSlots = (startIndex, lookahead) => {
+    let nextEvents = [];
+    let cur = startIndex;
+    if (events[cur] == undefined) {
+      return nextEvents;
+    }
+    let slot = Number(events[cur][0]);
+    const startSlot = slot;
+    while (slot <= startSlot + lookahead) {
+      nextEvents.push(events[cur]);
+      cur += 1;
+      if (events[cur] == undefined) {
+        break;
+      }
+      slot = Number(events[cur][0]);
+    }
+    return nextEvents;
+  };
+
+  const countActivity = (clientId, events) =>
+    events.filter((e) => e[1] == clientId || e[5] == clientId).length
+
+  let idle = {};
+  for (let eix = 1; eix < events.length; eix++) {
+    // Skip empty lines
+    if (events[eix] == undefined) {
+      continue;
+    }
+    // NOTE: slot is a string!
+    const [slot,sender,_event,_size, _amount,recipient] = events[eix];
+
+    const lookahead = nextSlots(eix+1, 60);
+    // console.log('activity of', sender, 'in next 60', countActivity(sender, lookahead));
+    // console.log('activity of', recipient, 'in next 60', countActivity(sender, lookahead));
+
+    const senderIdle = countActivity(sender, lookahead) == 0;
+    const recipientIdle = countActivity(recipient, lookahead) == 0;
+    if (idle[slot] == undefined) {
+      idle[slot] = {};
+    }
+    if (senderIdle) {
+      idle[slot][sender] = senderIdle;
+    } else {
+      delete idle[slot][sender];
+    }
+    if (recipientIdle) {
+      idle[slot][recipient] = recipientIdle;
+    } else {
+      delete idle[slot][recipient];
+    }
+  }
+  // console.log(idle);
+
+  const labels = Object.keys(idle).sort((a,b) => a-b);
+  const data = labels.map(slot => Object.keys(idle[slot]).length);
+
+  const configuration = {
+    type: 'line',
+    options: {
+      scales: {
+        x: { display: true, },
+        y: { display: true, }
+      }
+    },
+    data: {
+      labels,
+      datasets: [{
+        label: "number of idle clients in the next 60 slots",
         fill: true,
         backgroundColor: "#f8c291",
         data,
