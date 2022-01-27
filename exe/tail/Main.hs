@@ -46,7 +46,7 @@ main = do
       pPrint options
       events <- prepareSimulation options
       writeEvents filepath events
-    Run options@RunOptions{paymentWindow} inputFilepath -> do
+    Run options@RunOptions{paymentWindow, settlementDelay} inputFilepath -> do
       pPrint options
       events <- readEventsThrow inputFilepath
 
@@ -55,7 +55,7 @@ main = do
 
       let trace = runSimulation options events
       let analyzeOptions :: AnalyzeOptions
-          analyzeOptions = defaultAnalyzeOptions{paymentWindow}
+          analyzeOptions = defaultAnalyzeOptions{paymentWindow, settlementDelay}
       (txs, retries, snapshots, submittedTxs) <- withProgressReport (lastSlot summary) options $ \reportProgress ->
         analyzeSimulation analyzeOptions reportProgress trace
       pPrint $ mkAnalyze analyzeOptions txs retries snapshots submittedTxs

@@ -78,8 +78,15 @@ import Quiet (
   Quiet (..),
  )
 
+data FractionsOfSettlementTime = FractionsOfSettlementTime
+  { tenth :: Double
+  , quarter :: Double
+  , half :: Double
+  }
+  deriving (Generic, Show)
+
 data Analyze = Analyze
-  { numberOfSubmittedTransactions :: Int
+  { numberOfScheduledTransactions :: Int
   , -- | Number of confirmed transactions within the timespan of the simulation
     numberOfConfirmedTransactions :: Int
   , -- | Number of transactions that have been retried (counting only 1 if a transaction is retried multiple times)
@@ -90,9 +97,9 @@ data Analyze = Analyze
   , -- | Average time for a transaction to get 'confirmed'. This includes snapshotting when
     -- relevant.
     averageConfirmationTime :: Milliseconds
-  , -- | How many confirmed transactions had been confirmed within one slot, 10 slots.
+  , -- | How many confirmed transactions had been confirmed within one slot, 10 slots, etc..
     percentConfirmedWithin1Slot :: Double
-  , percentConfirmedWithin10Slots :: Double
+  , percentConfirmedWithin :: FractionsOfSettlementTime
   , -- | A measure of how frequent are snapshots on clients. A high coefficient means
     -- that clients usually "see" a lot of volume before it makes a snapshot. A coefficient
     -- close to 1 means that clients do snapshot for almost every transaction.
@@ -118,14 +125,12 @@ analyzeSimulation ::
   Trace () ->
   m (Transactions, Retries, Snapshots, NumberOfSubmittedTransactions)
 analyzeSimulation options notify trace = do
-  (confirmations, retries, snapshots, submittedTxs, _) <-
+  (confirmations, retries, snapshots, scheduledTxs, _) <-
     let fn ::
           (ThreadLabel, Time, TraceTailSimulation) ->
           (Transactions, Retries, Snapshots, NumberOfSubmittedTransactions, SlotNo) ->
           m (Transactions, Retries, Snapshots, NumberOfSubmittedTransactions, SlotNo)
         fn = \case
-          (_threadLabel, _, TraceServer (TraceServerMultiplexer (MPRecvTrailing _clientId NewTx{}))) ->
-            (\(!m, !r, !sn, !rt, !sl) -> pure (m, r, sn, rt + 1, sl))
           (_threadLabel, _, TraceServer (TraceServerMultiplexer (MPRecvTrailing clientId SnapshotDone{}))) ->
             (\(!m, !r, !sn, !rt, !sl) -> pure (m, r, Map.adjust (0 :) clientId sn, rt, sl))
           (_threadLabel, _, TraceServer (TraceTransactionBlocked ref)) ->
@@ -164,7 +169,7 @@ analyzeSimulation options notify trace = do
                   )
             )
           (_threadLabel, Time t, TraceEventLoop (TraceEventLoopTxScheduled ref)) ->
-            (\(!m, !r, !sn, !rt, !sl) -> pure (Map.insert ref [t] m, r, sn, rt, sl))
+            (\(!m, !r, !sn, !rt, !sl) -> pure (Map.insert ref [t] m, r, sn, rt + 1, sl))
           (_threadLabel, _time, TraceEventLoop (TraceEventLoopTick sl')) ->
             ( \(!m, !r, !sn, !rt, !sl) ->
                 if sl' > sl
@@ -177,7 +182,7 @@ analyzeSimulation options notify trace = do
           _ ->
             pure
      in foldTraceEvents fn (mempty, mempty, mempty, 0, -1) trace
-  pure (confirmations, retries, snapshots, submittedTxs)
+  pure (confirmations, retries, snapshots, scheduledTxs)
 
 mkAnalyze ::
   AnalyzeOptions ->
@@ -186,16 +191,16 @@ mkAnalyze ::
   Snapshots ->
   NumberOfSubmittedTransactions ->
   Analyze
-mkAnalyze AnalyzeOptions{discardEdges, paymentWindow} txs retries snapshots numberOfSubmittedTransactions =
+mkAnalyze AnalyzeOptions{discardEdges, paymentWindow, settlementDelay} txs retries snapshots numberOfScheduledTransactions =
   Analyze
-    { numberOfConfirmedTransactions
-    , numberOfSubmittedTransactions
+    { numberOfScheduledTransactions
+    , numberOfConfirmedTransactions
     , numberOfRetriedTransactions
     , numberOfRetriedConfirmedTransactions
     , numberOfSnapshots
     , averageConfirmationTime
-    , percentConfirmedWithin10Slots
     , percentConfirmedWithin1Slot
+    , percentConfirmedWithin = FractionsOfSettlementTime{half, quarter, tenth}
     , rebalancingCoefficient
     }
  where
@@ -238,9 +243,17 @@ mkAnalyze AnalyzeOptions{discardEdges, paymentWindow} txs retries snapshots numb
   totalConfirmationTime = sum confirmationTimes
 
   percentConfirmedWithin1Slot =
-    length (filter (< 1) confirmationTimes) `percentOf` numberOfConfirmedTransactions
+    length (filter (< 1) confirmationTimes) `percentOf` numberOfScheduledTransactions
 
-  percentConfirmedWithin10Slots =
-    length (filter (< 10) confirmationTimes) `percentOf` numberOfConfirmedTransactions
+  s = fromIntegral (unSlotNo settlementDelay)
+
+  half =
+    length (filter (< (s / 2)) confirmationTimes) `percentOf` numberOfScheduledTransactions
+
+  quarter =
+    length (filter (< (s / 4)) confirmationTimes) `percentOf` numberOfScheduledTransactions
+
+  tenth =
+    length (filter (< (s / 10)) confirmationTimes) `percentOf` numberOfScheduledTransactions
 
   percentOf a b = (fromIntegral a :: Double) / fromIntegral b

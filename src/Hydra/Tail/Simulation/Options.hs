@@ -148,11 +148,12 @@ data RunOptions = RunOptions
 data AnalyzeOptions = AnalyzeOptions
   { discardEdges :: Maybe Int
   , paymentWindow :: Maybe Lovelace
+  , settlementDelay :: SlotNo
   }
   deriving (Generic, Show)
 
 defaultAnalyzeOptions :: AnalyzeOptions
-defaultAnalyzeOptions = AnalyzeOptions Nothing Nothing
+defaultAnalyzeOptions = AnalyzeOptions Nothing Nothing 0
 
 prepareOptionsParser :: Parser PrepareOptions
 prepareOptionsParser =
@@ -314,6 +315,7 @@ analyzeOptionsParser =
   AnalyzeOptions
     <$> optional discardEdgesOption
     <*> optional paymentWindowOption
+    <*> settlementDelayOption
 
 discardEdgesOption :: Parser Int
 discardEdgesOption =
