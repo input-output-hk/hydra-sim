@@ -749,7 +749,8 @@ data TraceEventLoop
 data SimulationSummary = SimulationSummary
   { numberOfClients :: !Integer
   , numberOfTransactions :: !Integer
-  , averageTransaction :: !Lovelace
+  , averagePayment :: !Lovelace
+  , highestPayment :: !Lovelace
   , totalVolume :: !Ada
   , lastSlot :: !SlotNo
   }
@@ -817,22 +818,24 @@ summarizeEvents RunOptions{paymentWindow} events =
   SimulationSummary
     { numberOfClients
     , numberOfTransactions
-    , averageTransaction
+    , averagePayment
+    , highestPayment
     , totalVolume
     , lastSlot
     }
  where
   numberOfClients = toInteger $ fromEnum $ greatestKnownClient events
-  (ada -> totalVolume, numberOfTransactions) = foldl' count (0, 0) events
+  (ada -> totalVolume, highestPayment, numberOfTransactions) =
+    foldl' count (0, 0, 0) events
    where
     w = fromMaybe (Lovelace $ round @Double @_ 1e99) paymentWindow
-    count (!volume, st) = \case
+    count (!volume, !hi, st) = \case
       (Event _ _ (NewTx MockTx{txAmount}))
         | txAmount <= w ->
-          (volume + txAmount, st + 1)
+          (volume + txAmount, max txAmount hi, st + 1)
       _ ->
-        (volume, st)
-  averageTransaction =
+        (volume, hi, st)
+  averagePayment =
     Lovelace $ unLovelace (lovelace totalVolume) `div` numberOfTransactions
   lastSlot = last events ^. #slot
 
