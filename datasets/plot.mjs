@@ -111,21 +111,30 @@ async function receivedVsSent(events) {
     }, {})
 
   const bounds =
-    [ [[0, 4], "~"]
-    , [[4, Number.POSITIVE_INFINITY], "🠕"]
+    [ [ 1, "~"]
+    , [ 2, "2x"]
+    , [ 3, "3x"]
+    , [ 4, "4x"]
+    , [ Number.POSITIVE_INFINITY, "🠕"]
     ];
 
-  const data = bounds.map(([[inf, sup], _]) => Object.keys(receivedAndSent)
-    .filter(clientId => {
+  let data = {};
+  Object
+    .keys(receivedAndSent)
+    .forEach(clientId =>  {
       const { sent, received } = receivedAndSent[clientId];
       const r = received / sent;
 
-      return (r >= 1/(1+sup) && r < 1/(1+inf)) || (r <= 1+sup && r > 1+inf)
-    })
-    .length
-  );
-
+      for (let [t, lbl] of bounds) {
+        if (r > 1/(1+t) && r < 1+t) {
+          data[lbl] = data[lbl] || 0;
+          data[lbl] += 1;
+          break;
+        }
+      }
+    });
   const labels = bounds.map(([_, lbl]) => lbl);
+  data = labels.map(lbl => data[lbl]);
 
   const backgroundColor =
     [ "#786fa6"
@@ -152,17 +161,22 @@ async function receivedVsSent(events) {
 
 async function amounts(events) {
   const bounds =
-    [ [0,    1]
-    , [1,   10]
-    , [10,  20]
-    , [20,  30]
-    , [30,  40]
-    , [40,  50]
-    , [50,  60]
-    , [60,  70]
-    , [70,  80]
-    , [80,  90]
-    , [90, 100]
+    [ [0,   20]
+    , [20,  40]
+    , [40,  60]
+    , [60,  80]
+    , [80, 100]
+    , [100, 120]
+    , [120, 140]
+    , [140, 160]
+    , [160, 180]
+    , [180, 200]
+    , [200, 220]
+    , [220,  240]
+    , [240,  260]
+    , [260,  280]
+    , [280,  300]
+    , [300,  Number.POSITIVE_INFINITY]
     ];
 
   const labels = bounds.map(([inf, sup]) => sup >= Number.POSITIVE_INFINITY
