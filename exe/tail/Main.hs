@@ -31,9 +31,12 @@ import Hydra.Tail.Simulation.Options (
   parseCommand,
   withProgressReport,
  )
+import Hydra.Tail.Simulation.PaymentWindow (unLovelace)
+import Hydra.Tail.Simulation.SlotNo (unSlotNo)
 import System.FilePath (
   replaceBaseName,
   takeBaseName,
+  (-<.>),
  )
 import Text.Pretty.Simple (
   pPrint,
@@ -60,20 +63,32 @@ main = do
         analyzeSimulation analyzeOptions reportProgress trace
       pPrint $ mkAnalyze analyzeOptions txs retries snapshots submittedTxs
 
-      let txsFilepath = resultName inputFilepath "txs"
+      let txsFilepath = resultName inputFilepath options -<.> "txs"
       putStrLn $ "Writing confirmation times into: " <> txsFilepath
       writeTransactions txsFilepath txs
 
-      let retriesFilepath = resultName inputFilepath "retries"
+      let retriesFilepath = resultName inputFilepath options -<.> "retries"
       putStrLn $ "Writing retries counts into: " <> retriesFilepath
       writeRetries retriesFilepath retries
     Analyze options filepath -> do
-      txs <- readTransactionsThrow (resultName filepath "txs")
-      retries <- readRetriesThrow (resultName filepath "retries")
+      let txsFilePath = filepath -<.> "txs"
+      putStrLn $ "Reading confirmation times from: " <> txsFilePath
+      txs <- readTransactionsThrow txsFilePath
+
+      let retriesFilePath = filepath -<.> "retries"
+      putStrLn $ "Reading retries counts from: " <> retriesFilePath
+      retries <- readRetriesThrow retriesFilePath
+
       let snapshots = mempty -- FIXME: Get from options or read from file.
       let submittedTxs = 0 -- FIXME
       pPrint $ mkAnalyze options txs retries snapshots submittedTxs
 
-resultName :: FilePath -> String -> FilePath
-resultName filepath kind =
-  replaceBaseName filepath (takeBaseName filepath <> "[" <> kind <> "]")
+resultName :: FilePath -> RunOptions -> FilePath
+resultName filepath RunOptions{paymentWindow, settlementDelay, proactiveSnapshot, enableBackupWallet, paymentCutOff} =
+  replaceBaseName filepath $
+    takeBaseName filepath
+      <> (maybe "" (\w -> "-window:" <> show (unLovelace w)) $ paymentWindow)
+      <> ("-delay:" <> show (unSlotNo settlementDelay))
+      <> (maybe "" (\p -> "-proActive:" <> show p) $ proactiveSnapshot)
+      <> (if paymentCutOff < 1.0 then "-cutOff:" <> show paymentCutOff else "")
+      <> (if enableBackupWallet then "-withBackup" else "")
