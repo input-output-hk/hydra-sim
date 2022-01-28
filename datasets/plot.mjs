@@ -28,7 +28,7 @@ await
   , [path.join(__dirname, "plots", "recipients.svg"), recipients]
   , [path.join(__dirname, "plots", "volume-usd.svg"), volume]
   , [path.join(__dirname, "plots", "density.svg"), density]
-  , [path.join(__dirname, "plots", "idle.svg"), idle]
+  , [path.join(__dirname, "plots", "busy.svg"), busy]
   , [path.join(__dirname, "plots", "received-vs-sent.svg"), receivedVsSent]
   ].forEach(async ([filepath, fn]) => {
     console.log(`Plotting: ${filepath}`);
@@ -56,8 +56,8 @@ fs.writeFileSync(outputFile, `<blockquote><i>generated from: \`${inputFile}\`</i
 <h3>density</h3>
 <img src="density.svg">
 
-<h3>idle</h3>
-<img src="idle.svg">
+<h3>busy</h3>
+<img src="busy.svg">
 `);
 
 console.log(`Done → ${outputFile}`);
@@ -311,11 +311,10 @@ async function density(events) {
   return chartJSNodeCanvas.renderToBuffer(configuration);
 }
 
-async function idle(events) {
-  // - Assume events ordered by slot
-  // - In each event check whether the involved parties are idle for the next x slots
-  // - sum idle parties and plot them per slot
-
+// Find number of client which would not be able to directly snapshot after a new-tx, by:
+// - In each event check whether sender or receiver is active in any of the next x slots
+// - Sum busy parties and plot them per slot
+async function busy(events) {
   const nextSlots = (startIndex, lookahead) => {
     let nextEvents = [];
     let cur = startIndex;
@@ -338,7 +337,8 @@ async function idle(events) {
   const countActivity = (clientId, events) =>
     events.filter((e) => e[1] == clientId || e[5] == clientId).length
 
-  let idle = {};
+  let busy = {};
+  let nodes = {};
   for (let eix = 1; eix < events.length; eix++) {
     // Skip empty lines
     if (events[eix] == undefined) {
@@ -346,31 +346,34 @@ async function idle(events) {
     }
     // NOTE: slot is a string!
     const [slot,sender,_event,_size, _amount,recipient] = events[eix];
+    nodes[sender] = true;
+    nodes[recipient] = true;
 
     const lookahead = nextSlots(eix+1, 60);
-    // console.log('activity of', sender, 'in next 60', countActivity(sender, lookahead));
-    // console.log('activity of', recipient, 'in next 60', countActivity(sender, lookahead));
+    // console.log(events[eix]);
+    // console.log(lookahead);
+    // console.log('slot', slot, 'activity of', sender, 'in next 60', countActivity(sender, lookahead));
+    // console.log('slot', slot, 'activity of', recipient, 'in next 60', countActivity(recipient, lookahead));
 
-    const senderIdle = countActivity(sender, lookahead) == 0;
-    const recipientIdle = countActivity(recipient, lookahead) == 0;
-    if (idle[slot] == undefined) {
-      idle[slot] = {};
+    const senderBusy = countActivity(sender, lookahead) > 0;
+    const recipientBusy = countActivity(recipient, lookahead) > 0;
+    if (busy[slot] == undefined) {
+      busy[slot] = {};
     }
-    if (senderIdle) {
-      idle[slot][sender] = senderIdle;
-    } else {
-      delete idle[slot][sender];
+    if (senderBusy) {
+      busy[slot][sender] = senderBusy;
     }
-    if (recipientIdle) {
-      idle[slot][recipient] = recipientIdle;
-    } else {
-      delete idle[slot][recipient];
+    if (recipientBusy) {
+      busy[slot][recipient] = recipientBusy;
     }
   }
-  // console.log(idle);
+  // console.log(busy[0])
+  // console.log(busy[1])
+  const uniqueClientIds = Object.keys(nodes).length;
+  console.log('Unique clientIds:', uniqueClientIds);
 
-  const labels = Object.keys(idle).sort((a,b) => a-b);
-  const data = labels.map(slot => Object.keys(idle[slot]).length);
+  const labels = Object.keys(busy).sort((a,b) => a-b);
+  const data = labels.map(slot => Object.keys(busy[slot]).length);
 
   const configuration = {
     type: 'line',
@@ -383,7 +386,7 @@ async function idle(events) {
     data: {
       labels,
       datasets: [{
-        label: "number of idle clients in the next 60 slots",
+        label: "number of clients busy in this AND the next 60 slots (no time to snapshot), total: " + uniqueClientIds,
         fill: true,
         backgroundColor: "#f8c291",
         data,
