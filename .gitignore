@@ -4,6 +4,6 @@
 .cabal.project.local
 events.csv
 node_modules
-/datasets/plots/*
+/datasets/**/*.html
 *.out
 *.csv

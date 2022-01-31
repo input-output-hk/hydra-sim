@@ -22,42 +22,45 @@ assert(typeof inputFile === 'string', 'Expected input filepath as 1st argument')
 
 const events = readCsvFileSync(inputFile);
 
-await
-  [ [path.join(__dirname, "plots", "sizes.svg"), sizes]
-  , [path.join(__dirname, "plots", "amounts.svg"), amounts]
-  , [path.join(__dirname, "plots", "recipients.svg"), recipients]
-  , [path.join(__dirname, "plots", "volume-usd.svg"), volume]
-  , [path.join(__dirname, "plots", "density.svg"), density]
-  , [path.join(__dirname, "plots", "busy.svg"), busy]
-  , [path.join(__dirname, "plots", "received-vs-sent.svg"), receivedVsSent]
-  ].forEach(async ([filepath, fn]) => {
-    console.log(`Plotting: ${filepath}`);
-    fs.writeFileSync(filepath, await fn(events));
-  });
+console.log(`Plotting: sizes`);
+const sizesUrl = await sizes(events);
+console.log(`Plotting: amounts`);
+const amountsUrl = await amounts(events);
+console.log(`Plotting: receivedVsSent`);
+const receivedVsSentUrl = await receivedVsSent(events);
+console.log(`Plotting: recipients`);
+const recipientsUrl = await recipients(events);
+console.log(`Plotting: volume`);
+const volumeUrl = await volume(events);
+console.log(`Plotting: density`);
+const densityUrl = await density(events);
+console.log(`Plotting: busy`);
+const busyUrl = await busy(events);
 
-const outputFile = path.join(__dirname, "plots", "index.html");
+const outputFileName = path.basename(inputFile, '.csv') + "-plots.html";
+const outputFile = path.join(path.dirname(inputFile), outputFileName);
 fs.writeFileSync(outputFile, `<blockquote><i>generated from: \`${inputFile}\`</i></blockquote>
 
 <h3>Transactions sizes (bytes)</h3>
-<img src="sizes.svg">
+<img src="${sizesUrl}">
 
 <h3>Transactions amounts</h3>
-<img src="amounts.svg">
+<img src="${amountsUrl}">
 
 <h3>Received vs Sent</h3>
-<img src="received-vs-sent.svg">
+<img src="${receivedVsSentUrl}">
 
 <h3>Recipients</h3>
-<img src="recipients.svg">
+<img src="${recipientsUrl}">
 
 <h3>Volume over time</h3>
-<img src="volume-usd.svg">
+<img src="${volumeUrl}">
 
 <h3>density</h3>
-<img src="density.svg">
+<img src="${densityUrl}">
 
 <h3>busy</h3>
-<img src="busy.svg">
+<img src="${busyUrl}">
 `);
 
 console.log(`Done → ${outputFile}`);
@@ -95,7 +98,7 @@ async function sizes(events) {
     },
   };
 
-  return chartJSNodeCanvas.renderToBuffer(configuration);
+  return chartJSNodeCanvas.renderToDataURL(configuration);
 }
 
 async function receivedVsSent(events) {
@@ -160,7 +163,7 @@ async function receivedVsSent(events) {
     },
   };
 
-  return chartJSNodeCanvas.renderToBuffer(configuration);
+  return chartJSNodeCanvas.renderToDataURL(configuration);
 }
 
 async function amounts(events) {
@@ -205,7 +208,7 @@ async function amounts(events) {
     },
   };
 
-  return chartJSNodeCanvas.renderToBuffer(configuration);
+  return chartJSNodeCanvas.renderToDataURL(configuration);
 }
 
 async function recipients(events) {
@@ -242,7 +245,7 @@ async function recipients(events) {
     },
   };
 
-  return chartJSNodeCanvas.renderToBuffer(configuration);
+  return chartJSNodeCanvas.renderToDataURL(configuration);
 }
 
 async function volume(events) {
@@ -275,7 +278,7 @@ async function volume(events) {
     },
   };
 
-  return chartJSNodeCanvas.renderToBuffer(configuration);
+  return chartJSNodeCanvas.renderToDataURL(configuration);
 }
 
 async function density(events) {
@@ -294,7 +297,7 @@ async function density(events) {
     options: {
       scales: {
         x: { display: true, },
-        y: { display: true, type: 'logarithmic', }
+        y: { display: true, }
       }
     },
     data: {
@@ -308,7 +311,7 @@ async function density(events) {
     },
   };
 
-  return chartJSNodeCanvas.renderToBuffer(configuration);
+  return chartJSNodeCanvas.renderToDataURL(configuration);
 }
 
 // Find number of client which would not be able to directly snapshot after a new-tx, by:
@@ -324,7 +327,10 @@ async function busy(events) {
     let slot = Number(events[cur][0]);
     const startSlot = slot;
     while (slot <= startSlot + lookahead) {
-      nextEvents.push(events[cur]);
+      // Only collect future slots
+      if (slot > startSlot) {
+        nextEvents.push(events[cur]);
+      }
       cur += 1;
       if (events[cur] == undefined) {
         break;
@@ -349,7 +355,7 @@ async function busy(events) {
     nodes[sender] = true;
     nodes[recipient] = true;
 
-    const lookahead = nextSlots(eix+1, 60);
+    const lookahead = nextSlots(eix+1, 300);
     // console.log(events[eix]);
     // console.log(lookahead);
     // console.log('slot', slot, 'activity of', sender, 'in next 60', countActivity(sender, lookahead));
@@ -386,7 +392,7 @@ async function busy(events) {
     data: {
       labels,
       datasets: [{
-        label: "number of clients busy in this AND the next 60 slots (no time to snapshot), total: " + uniqueClientIds,
+        label: "number of clients busy in this AND the next 300 slots (no time to snapshot), total: " + uniqueClientIds,
         fill: true,
         backgroundColor: "#f8c291",
         data,
@@ -394,5 +400,5 @@ async function busy(events) {
     },
   };
 
-  return chartJSNodeCanvas.renderToBuffer(configuration);
+  return chartJSNodeCanvas.renderToDataURL(configuration);
 }
