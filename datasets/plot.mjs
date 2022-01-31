@@ -22,41 +22,26 @@ assert(typeof inputFile === 'string', 'Expected input filepath as 1st argument')
 
 const events = readCsvFileSync(inputFile);
 
-console.log(`Plotting: sizes`);
-const sizesUrl = await sizes(events);
-console.log(`Plotting: amounts`);
-const amountsUrl = await amounts(events);
-console.log(`Plotting: receivedVsSent`);
-const receivedVsSentUrl = await receivedVsSent(events);
-console.log(`Plotting: recipients`);
-const recipientsUrl = await recipients(events);
-console.log(`Plotting: volume`);
-const volumeUrl = await volume(events);
 console.log(`Plotting: density`);
 const densityUrl = await density(events);
 console.log(`Plotting: busy`);
 const busyUrl = await busy(events);
 console.log(`Plotting: scheduledTxs`)
 const scheduledTxsUrl = await scheduledTxs(events);
+console.log(`Plotting: receivedVsSent`);
+const receivedVsSentUrl = await receivedVsSent(events);
+console.log(`Plotting: sizes`);
+const sizesUrl = await sizes(events);
+console.log(`Plotting: amounts`);
+const amountsUrl = await amounts(events);
+console.log(`Plotting: recipients`);
+const recipientsUrl = await recipients(events);
+console.log(`Plotting: volume`);
+const volumeUrl = await volume(events);
 
 const outputFileName = path.basename(inputFile, '.csv') + "-plots.html";
 const outputFile = path.join(path.dirname(inputFile), outputFileName);
 fs.writeFileSync(outputFile, `<blockquote><i>generated from: \`${inputFile}\`</i></blockquote>
-
-<h3>Transactions sizes (bytes)</h3>
-<img src="${sizesUrl}">
-
-<h3>Transactions amounts</h3>
-<img src="${amountsUrl}">
-
-<h3>Received vs Sent</h3>
-<img src="${receivedVsSentUrl}">
-
-<h3>Recipients</h3>
-<img src="${recipientsUrl}">
-
-<h3>Volume over time</h3>
-<img src="${volumeUrl}">
 
 <h3>Density</h3>
 <img src="${densityUrl}">
@@ -66,6 +51,21 @@ fs.writeFileSync(outputFile, `<blockquote><i>generated from: \`${inputFile}\`</i
 
 <h3>Scheduled transactions per client</h3>
 <img src="${scheduledTxsUrl}">
+
+<h3>Received vs Sent</h3>
+<img src="${receivedVsSentUrl}">
+
+<h3>Transactions sizes (bytes)</h3>
+<img src="${sizesUrl}">
+
+<h3>Transactions amounts</h3>
+<img src="${amountsUrl}">
+
+<h3>Recipients</h3>
+<img src="${recipientsUrl}">
+
+<h3>Volume over time</h3>
+<img src="${volumeUrl}">
 `);
 
 console.log(`Done → ${outputFile}`);
@@ -409,29 +409,22 @@ async function busy(events) {
 }
 
 async function scheduledTxs(events) {
-  const bounds =
-    [ [0,   1]
-    , [1,  2]
-    , [2,  5]
-    , [5,  10]
-    , [10, 90]
-    , [90, 100]
-    , [100, Number.POSITIVE_INFINITY]
-    ];
-
-  let clientActivity = {};
+  let activity = {};
+  let sent = {};
+  let received = {};
   events.map(([_slot, sender, _event, _size, _amt, recipient]) => {
     if (sender != undefined) {
-      clientActivity[sender] = (clientActivity[sender] || 0) + 1;
+      activity[sender] = (activity[sender] || 0) + 1;
+      sent[sender] = (sent[sender] || 0) + 1;
     }
     if (recipient != undefined) {
-      clientActivity[recipient] = (clientActivity[recipient] || 0) + 1;
+      activity[recipient] = (activity[recipient] || 0) + 1;
+      received[recipient] = (received[recipient] || 0) + 1;
     }
-    console.log(clientActivity[sender])
   });
 
-  const labels = Object.keys(clientActivity).sort((a,b) => a-b);
-  const data = labels.map(cid => clientActivity[cid]);
+  const labels = Object.keys(activity).sort((a,b) => a-b);
+  const data = labels.map(cid => activity[cid]);
 
   const configuration = {
     type: 'line',
@@ -444,7 +437,7 @@ async function scheduledTxs(events) {
     data: {
       labels,
       datasets: [{
-        label: "# of scheduled transactions per client",
+        label: "# of txs per client",
         backgroundColor: "#82ccdd",
         fill: true,
         data,
