@@ -36,6 +36,8 @@ console.log(`Plotting: density`);
 const densityUrl = await density(events);
 console.log(`Plotting: busy`);
 const busyUrl = await busy(events);
+console.log(`Plotting: scheduledTxs`)
+const scheduledTxsUrl = await scheduledTxs(events);
 
 const outputFileName = path.basename(inputFile, '.csv') + "-plots.html";
 const outputFile = path.join(path.dirname(inputFile), outputFileName);
@@ -56,11 +58,14 @@ fs.writeFileSync(outputFile, `<blockquote><i>generated from: \`${inputFile}\`</i
 <h3>Volume over time</h3>
 <img src="${volumeUrl}">
 
-<h3>density</h3>
+<h3>Density</h3>
 <img src="${densityUrl}">
 
-<h3>busy</h3>
+<h3>Busy clients</h3>
 <img src="${busyUrl}">
+
+<h3>Scheduled transactions per client</h3>
+<img src="${scheduledTxsUrl}">
 `);
 
 console.log(`Done → ${outputFile}`);
@@ -396,6 +401,52 @@ async function busy(events) {
         fill: true,
         backgroundColor: "#f8c291",
         data,
+      }],
+    },
+  };
+
+  return chartJSNodeCanvas.renderToDataURL(configuration);
+}
+
+async function scheduledTxs(events) {
+  const bounds =
+    [ [0,   1]
+    , [1,  2]
+    , [2,  5]
+    , [5,  10]
+    , [10, 90]
+    , [90, 100]
+    , [100, Number.POSITIVE_INFINITY]
+    ];
+
+  let clientActivity = {};
+  events.map(([_slot, sender, _event, _size, _amt, recipient]) => {
+    if (sender != undefined) {
+      clientActivity[sender] = (clientActivity[sender] || 0) + 1;
+    }
+    if (recipient != undefined) {
+      clientActivity[recipient] = (clientActivity[recipient] || 0) + 1;
+    }
+  });
+  console.log(Object.values(clientActivity).sort().reverse());
+
+  const labels = bounds.map(([inf, sup]) => sup >= Number.POSITIVE_INFINITY
+    ? `${inf}+`
+    : `${inf}-${sup}`
+  );
+
+  const data = bounds.map(([lo,hi]) =>
+    Object.values(clientActivity).filter((act) => act && +act >= lo && +act < hi).length
+  );
+
+  const configuration = {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: "# of scheduled transactions per client",
+        backgroundColor: "#82ccdd",
+        data
       }],
     },
   };
