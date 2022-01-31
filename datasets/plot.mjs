@@ -427,26 +427,27 @@ async function scheduledTxs(events) {
     if (recipient != undefined) {
       clientActivity[recipient] = (clientActivity[recipient] || 0) + 1;
     }
+    console.log(clientActivity[sender])
   });
-  console.log(Object.values(clientActivity).sort().reverse());
 
-  const labels = bounds.map(([inf, sup]) => sup >= Number.POSITIVE_INFINITY
-    ? `${inf}+`
-    : `${inf}-${sup}`
-  );
-
-  const data = bounds.map(([lo,hi]) =>
-    Object.values(clientActivity).filter((act) => act && +act >= lo && +act < hi).length
-  );
+  const labels = Object.keys(clientActivity).sort((a,b) => a-b);
+  const data = labels.map(cid => clientActivity[cid]);
 
   const configuration = {
-    type: 'bar',
+    type: 'line',
+    options: {
+      scales: {
+        x: { display: true, },
+        y: { display: true, }
+      }
+    },
     data: {
       labels,
       datasets: [{
         label: "# of scheduled transactions per client",
         backgroundColor: "#82ccdd",
-        data
+        fill: true,
+        data,
       }],
     },
   };
