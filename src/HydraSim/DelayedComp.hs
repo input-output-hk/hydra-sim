@@ -22,7 +22,7 @@ data DelayedComp a = DelayedComp
 
 instance Applicative DelayedComp where
   pure = promptComp
-  (DelayedComp f d) <*> (DelayedComp x d') = DelayedComp (f x) (addMaybes d d')
+  (DelayedComp f d) <*> (DelayedComp x d') = DelayedComp (f x) (d `max` d')
 
 instance Monad DelayedComp where
   (DelayedComp x d) >>= f =
