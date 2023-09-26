@@ -17,9 +17,6 @@ module Hydra.Tail.Simulation.Analyze (
 
 import Prelude
 
-import Control.Monad.Class.MonadTime (
-  Time (..),
- )
 import Control.Monad.IOSim (
   ThreadLabel,
   Trace (..),
@@ -87,23 +84,23 @@ data FractionsOfSettlementTime = FractionsOfSettlementTime
 
 data Analyze = Analyze
   { numberOfScheduledTransactions :: Int
-  , -- | Number of confirmed transactions within the timespan of the simulation
-    numberOfConfirmedTransactions :: Int
-  , -- | Number of transactions that have been retried (counting only 1 if a transaction is retried multiple times)
-    numberOfRetriedTransactions :: Int
+  , numberOfConfirmedTransactions :: Int
+  -- ^ Number of confirmed transactions within the timespan of the simulation
+  , numberOfRetriedTransactions :: Int
+  -- ^ Number of transactions that have been retried (counting only 1 if a transaction is retried multiple times)
   , numberOfRetriedConfirmedTransactions :: Int
-  , -- | Total number of snapshots across ALL clients
-    numberOfSnapshots :: Int
-  , -- | Average time for a transaction to get 'confirmed'. This includes snapshotting when
-    -- relevant.
-    averageConfirmationTime :: Milliseconds
-  , -- | How many confirmed transactions had been confirmed within one slot, 10 slots, etc..
-    percentConfirmedWithin1Slot :: Double
+  , numberOfSnapshots :: Int
+  -- ^ Total number of snapshots across ALL clients
+  , averageConfirmationTime :: Milliseconds
+  -- ^ Average time for a transaction to get 'confirmed'. This includes snapshotting when
+  -- relevant.
+  , percentConfirmedWithin1Slot :: Double
+  -- ^ How many confirmed transactions had been confirmed within one slot, 10 slots, etc..
   , percentConfirmedWithin :: FractionsOfSettlementTime
-  , -- | A measure of how frequent are snapshots on clients. A high coefficient means
-    -- that clients usually "see" a lot of volume before it makes a snapshot. A coefficient
-    -- close to 1 means that clients do snapshot for almost every transaction.
-    rebalancingCoefficient :: Maybe Double
+  , rebalancingCoefficient :: Maybe Double
+  -- ^ A measure of how frequent are snapshots on clients. A high coefficient means
+  -- that clients usually "see" a lot of volume before it makes a snapshot. A coefficient
+  -- close to 1 means that clients do snapshot for almost every transaction.
   }
   deriving (Generic, Show)
 

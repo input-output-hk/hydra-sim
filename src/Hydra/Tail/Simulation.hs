@@ -8,6 +8,21 @@ module Hydra.Tail.Simulation where
 
 import Prelude
 
+import Control.Concurrent.Class.MonadSTM (
+  MonadSTM,
+  TMVar,
+  TVar,
+  atomically,
+  modifyTVar',
+  newTMVarIO,
+  newTVarIO,
+  putTMVar,
+  readTVar,
+  retry,
+  takeTMVar,
+  tryTakeTMVar,
+  writeTVar,
+ )
 import Control.Exception (
   Exception,
  )
@@ -25,21 +40,6 @@ import Control.Monad.Class.MonadAsync (
   concurrently_,
   forConcurrently_,
  )
-import Control.Monad.Class.MonadSTM (
-  MonadSTM,
-  TMVar,
-  TVar,
-  atomically,
-  modifyTVar',
-  newTMVarIO,
-  newTVarIO,
-  putTMVar,
-  readTVar,
-  retry,
-  takeTMVar,
-  tryTakeTMVar,
-  writeTVar,
- )
 import Control.Monad.Class.MonadThrow (
   MonadThrow,
   throwIO,
@@ -53,6 +53,7 @@ import Control.Monad.Class.MonadTimer (
  )
 import Control.Monad.IOSim (
   IOSim,
+  SimTrace,
   Trace (..),
   runSimTrace,
  )
@@ -69,7 +70,7 @@ import Control.Monad.Trans.State.Strict (
 import Control.Tracer (
   Tracer (..),
   contramap,
-  traceWith,
+  traceWith, emit,
  )
 import Data.Generics.Internal.VL.Lens (
   (^.),
@@ -180,7 +181,7 @@ prepareSimulation options@PrepareOptions{numberOfClients, duration} = do
           join <$> traverse (stepClient options currentSlot) clientIds
   newStdGen >>= evalStateT events
 
-runSimulation :: RunOptions -> [Event] -> Trace ()
+runSimulation :: RunOptions -> [Event] -> SimTrace ()
 runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
   let (serverId, clientIds) = (0, [1 .. greatestKnownClient events])
   server <- newServer serverId clientIds serverOptions
@@ -217,8 +218,8 @@ runSimulation opts@RunOptions{serverOptions} events = runSimTrace $ do
             (opts ^. #paymentWindow)
     _ -> True
 
-  tracer :: Tracer (IOSim a) TraceTailSimulation
-  tracer = Tracer IOSim.traceM
+  tracer :: Tracer (IOSim s) TraceTailSimulation
+  tracer = Tracer $ emit IOSim.traceM
 
   trClient :: Client m -> Tracer (IOSim a) TraceClient
   trClient Client{identifier} = contramap (TraceClient identifier) tracer
@@ -482,54 +483,54 @@ evaluateClient _ Nothing _ _ _ =
   pure Nothing
 evaluateClient useSndWallet (Just paymentWindow) (sender, tx) clientId (st, wallets, _)
   | useSndWallet =
-    case (mAmount, st) of
-      (Just{}, DoingSnapshot ws)
-        | all (`elem` ws) [FstWallet, SndWallet] ->
-          pure $ Just $ ShouldRequestSnapshot True Nothing
-      (Just amount, DoingSnapshot [FstWallet]) ->
-        case viewPaymentWindow paymentWindow (wallets ! SndWallet) amount of
-          OutOfPaymentWindow ->
-            pure $ Just $ ShouldRequestSnapshot True (Just SndWallet)
-          InPaymentWindow ->
-            pure Nothing
-      (Just amount, DoingSnapshot [SndWallet]) ->
-        case viewPaymentWindow paymentWindow (wallets ! FstWallet) amount of
-          OutOfPaymentWindow ->
-            pure $ Just $ ShouldRequestSnapshot True (Just FstWallet)
-          InPaymentWindow ->
-            pure Nothing
-      (Just amount, _) ->
-        case viewPaymentWindow paymentWindow (wallets ! FstWallet) amount of
-          OutOfPaymentWindow ->
-            case viewPaymentWindow paymentWindow (wallets ! SndWallet) amount of
-              OutOfPaymentWindow ->
-                pure $ Just $ ShouldRequestSnapshot True (Just FstWallet)
-              InPaymentWindow ->
-                pure $ Just $ ShouldRequestSnapshot False (Just FstWallet)
-          InPaymentWindow ->
-            pure Nothing
-      (Nothing, _) ->
-        pure Nothing
+      case (mAmount, st) of
+        (Just{}, DoingSnapshot ws)
+          | all (`elem` ws) [FstWallet, SndWallet] ->
+              pure $ Just $ ShouldRequestSnapshot True Nothing
+        (Just amount, DoingSnapshot [FstWallet]) ->
+          case viewPaymentWindow paymentWindow (wallets ! SndWallet) amount of
+            OutOfPaymentWindow ->
+              pure $ Just $ ShouldRequestSnapshot True (Just SndWallet)
+            InPaymentWindow ->
+              pure Nothing
+        (Just amount, DoingSnapshot [SndWallet]) ->
+          case viewPaymentWindow paymentWindow (wallets ! FstWallet) amount of
+            OutOfPaymentWindow ->
+              pure $ Just $ ShouldRequestSnapshot True (Just FstWallet)
+            InPaymentWindow ->
+              pure Nothing
+        (Just amount, _) ->
+          case viewPaymentWindow paymentWindow (wallets ! FstWallet) amount of
+            OutOfPaymentWindow ->
+              case viewPaymentWindow paymentWindow (wallets ! SndWallet) amount of
+                OutOfPaymentWindow ->
+                  pure $ Just $ ShouldRequestSnapshot True (Just FstWallet)
+                InPaymentWindow ->
+                  pure $ Just $ ShouldRequestSnapshot False (Just FstWallet)
+            InPaymentWindow ->
+              pure Nothing
+        (Nothing, _) ->
+          pure Nothing
   | otherwise =
-    case (mAmount, st) of
-      (Just{}, DoingSnapshot{}) ->
-        pure $ Just $ ShouldRequestSnapshot True Nothing
-      (Just amount, Online) ->
-        case viewPaymentWindow paymentWindow (wallets ! FstWallet) amount of
-          OutOfPaymentWindow ->
-            pure $ Just $ ShouldRequestSnapshot True (Just FstWallet)
-          InPaymentWindow ->
-            pure Nothing
-      (Nothing, _) ->
-        pure Nothing
+      case (mAmount, st) of
+        (Just{}, DoingSnapshot{}) ->
+          pure $ Just $ ShouldRequestSnapshot True Nothing
+        (Just amount, Online) ->
+          case viewPaymentWindow paymentWindow (wallets ! FstWallet) amount of
+            OutOfPaymentWindow ->
+              pure $ Just $ ShouldRequestSnapshot True (Just FstWallet)
+            InPaymentWindow ->
+              pure Nothing
+        (Nothing, _) ->
+          pure Nothing
  where
   mAmount
     | clientId `elem` txRecipients tx =
-      Just $ negate (sent tx)
+        Just $ negate (sent tx)
     | clientId == sender =
-      Just $ received tx
+        Just $ received tx
     | otherwise =
-      Nothing
+        Nothing
 
 anyInProactiveSnapshotLimit :: RunOptions -> Map Wallet Balance -> Maybe Wallet
 anyInProactiveSnapshotLimit opts wallets =
@@ -604,7 +605,7 @@ modifyBalance st fn =
       Map.adjust (modifyCurrent fn) FstWallet
     DoingSnapshot ws
       | FstWallet `elem` ws ->
-        Map.adjust (modifyCurrent fn) SndWallet
+          Map.adjust (modifyCurrent fn) SndWallet
     _ ->
       Map.adjust (modifyCurrent fn) FstWallet
 
@@ -849,7 +850,7 @@ summarizeEvents RunOptions{paymentWindow} events =
     count (!volume, !hi, st) = \case
       (Event _ _ (NewTx MockTx{txAmount}))
         | txAmount <= w ->
-          (volume + txAmount, max txAmount hi, st + 1)
+            (volume + txAmount, max txAmount hi, st + 1)
       _ ->
         (volume, hi, st)
   averagePayment =

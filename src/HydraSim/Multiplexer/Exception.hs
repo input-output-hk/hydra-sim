@@ -1,11 +1,11 @@
-module HydraSim.Multiplexer.Exception
-  ( MultiplexerException (..)
-  ) where
+module HydraSim.Multiplexer.Exception (
+  MultiplexerException (..),
+) where
 
-import HydraSim.Types (NodeId)
 import Control.Exception (Exception)
+import HydraSim.Types (NodeId)
 
-data MultiplexerException =
-    MissingChannel NodeId
-    deriving Show
+data MultiplexerException
+  = MissingChannel NodeId
+  deriving (Show)
 instance Exception MultiplexerException

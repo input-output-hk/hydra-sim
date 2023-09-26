@@ -12,18 +12,18 @@
 --
 -- We use 'Delayedcomp' to account for time that real cryptographic primitives
 -- might take.
-module HydraSim.MSig.Mock
-  ( VKey (..),
-    SKey (..),
-    Sig,
-    AVKey,
-    ASKey,
-    ASig,
-    ms_avk,
-    ms_sign_delayed,
-    ms_asig_delayed,
-    ms_verify_delayed,
-  )
+module HydraSim.MSig.Mock (
+  VKey (..),
+  SKey (..),
+  Sig,
+  AVKey,
+  ASKey,
+  ASig,
+  ms_avk,
+  ms_sign_delayed,
+  ms_asig_delayed,
+  ms_verify_delayed,
+)
 where
 
 import Data.Set (Set)

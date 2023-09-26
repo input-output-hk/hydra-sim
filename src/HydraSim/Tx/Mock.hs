@@ -1,23 +1,25 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeFamilies #-}
-module HydraSim.Tx.Mock
-  ( MockTx (..),
-    TxRef (..),
-    TxInput
-  ) where
+
+module HydraSim.Tx.Mock (
+  MockTx (..),
+  TxRef (..),
+  TxInput,
+) where
 
 import qualified Data.Set as Set
-import           Data.Time.Clock (DiffTime)
-import           HydraSim.DelayedComp
-import           HydraSim.Sized
-import           HydraSim.Tx.Class
+import Data.Time.Clock (DiffTime)
+import HydraSim.DelayedComp
+import HydraSim.Sized
+import HydraSim.Tx.Class
 
 -- | A transaction that is always valid, and takes a fixed time to validate.
-data MockTx = MockTx {
-  mtxRef :: TxRef MockTx,
-  mtxValidationDelay :: DiffTime,
-  mtxSize :: Size
-} deriving Show
+data MockTx = MockTx
+  { mtxRef :: TxRef MockTx
+  , mtxValidationDelay :: DiffTime
+  , mtxSize :: Size
+  }
+  deriving (Show)
 
 instance Tx MockTx where
   newtype TxRef MockTx = TxId Int

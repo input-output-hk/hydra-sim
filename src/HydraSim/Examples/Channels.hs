@@ -1,46 +1,47 @@
 module HydraSim.Examples.Channels (AWSCenters (..), channel, getSOrError) where
 
-import Control.Monad.Class.MonadAsync
-import Control.Monad.Class.MonadTime
-import Control.Monad.Class.MonadTimer
-import HydraSim.Channel
+import Control.Monad.Class.MonadAsync (MonadAsync)
+import Control.Monad.Class.MonadTimer.SI (DiffTime, MonadDelay)
+import HydraSim.Channel (
+  Channel,
+  createConnectedConstDelayChannels,
+ )
 
 data AWSCenters
-    = NVirginiaAWS
-    | OhioAWS
-    | NCaliforniaAWS
-    | OregonAWS
-    | CanadaAWS
-    | IrelandAWS
-    | LondonAWS
-    | FrankfurtAWS
-    | TokyoAWS
-    | SeoulAWS
-    | SingaporeAWS
-    | SydneyAWS
-    | MumbaiAWS
-    | SaoPauloAWS
-    | GL10
-    deriving (Eq, Ord, Bounded, Enum, Show, Read)
+  = NVirginiaAWS
+  | OhioAWS
+  | NCaliforniaAWS
+  | OregonAWS
+  | CanadaAWS
+  | IrelandAWS
+  | LondonAWS
+  | FrankfurtAWS
+  | TokyoAWS
+  | SeoulAWS
+  | SingaporeAWS
+  | SydneyAWS
+  | MumbaiAWS
+  | SaoPauloAWS
+  | GL10
+  deriving (Eq, Ord, Bounded, Enum, Show, Read)
 
-{- | Create a delayed channel, with an @S@ taken from measurements between data
- centers across the world.
--}
+-- | Create a delayed channel, with an @S@ taken from measurements between data
+-- centers across the world.
 channel ::
-    (MonadAsync m, MonadTimer m, MonadTime m) =>
-    AWSCenters ->
-    AWSCenters ->
-    m (Channel m a, Channel m a)
+  (MonadAsync m, MonadDelay m) =>
+  AWSCenters ->
+  AWSCenters ->
+  m (Channel m a, Channel m a)
 channel loc loc' =
-    createConnectedConstDelayChannels (getSOrError loc loc')
+  createConnectedConstDelayChannels (getSOrError loc loc')
 
 -- | Get the @S@ for two data centers. Errors if the list is incomplete.
 getSOrError :: AWSCenters -> AWSCenters -> DiffTime
 getSOrError loc loc' =
-    case (getS loc loc', getS loc' loc) of
-        (Just s, _) -> s
-        (_, Just s) -> s
-        _ -> error $ "Can't get s for " ++ show (loc, loc')
+  case (getS loc loc', getS loc' loc) of
+    (Just s, _) -> s
+    (_, Just s) -> s
+    _ -> error $ "Can't get s for " ++ show (loc, loc')
 
 getS :: AWSCenters -> AWSCenters -> Maybe DiffTime
 getS NVirginiaAWS OhioAWS = Just 0.006
@@ -135,5 +136,5 @@ getS SydneyAWS MumbaiAWS = Just 0.111
 getS SydneyAWS SaoPauloAWS = Just 0.16
 getS MumbaiAWS SaoPauloAWS = Just 0.153
 getS x y
-    | x == y = Just 0.005
+  | x == y = Just 0.005
 getS _ _ = Nothing

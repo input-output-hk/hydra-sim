@@ -1,12 +1,12 @@
-module HydraSim.Multiplexer.Trace
-  ( TraceMultiplexer (..)
-  ) where
+module HydraSim.Multiplexer.Trace (
+  TraceMultiplexer (..),
+) where
 
-import HydraSim.Types (NodeId)
 import HydraSim.Sized
+import HydraSim.Types (NodeId)
 
-data TraceMultiplexer a =
-    MPSendLeading NodeId Size
+data TraceMultiplexer a
+  = MPSendLeading NodeId Size
   | MPSendTrailing NodeId a
   | MPRecvLeading NodeId Size
   | MPRecvIdling

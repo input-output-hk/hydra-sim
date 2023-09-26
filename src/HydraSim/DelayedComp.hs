@@ -1,22 +1,28 @@
 {-# LANGUAGE DeriveFunctor #-}
-module HydraSim.DelayedComp
-  ( DelayedComp (..),
 
-    delayedComp, promptComp,
-    runComp
-  ) where
+module HydraSim.DelayedComp (
+  DelayedComp (..),
+  delayedComp,
+  promptComp,
+  runComp,
+) where
 
-import Control.Monad.Class.MonadTimer
-
+import Control.Monad.Class.MonadTimer (
+  MonadTimer,
+ )
+import Control.Monad.Class.MonadTimer.SI (
+  MonadDelay (threadDelay),
+ )
+import Data.Time (DiffTime)
 
 -- | A computation that might take a non-neglible amount of time.
 data DelayedComp a = DelayedComp
-  { -- | The valueproduced by the computation
-    unComp :: a,
-    -- | In simulations, we allow for an explicit delay to replace an actual
-    -- computation. This allows us to mock things like scripts and cryptographic
-    -- primitives.
-    compDelay :: Maybe DiffTime
+  { unComp :: a
+  -- ^ The valueproduced by the computation
+  , compDelay :: Maybe DiffTime
+  -- ^ In simulations, we allow for an explicit delay to replace an actual
+  -- computation. This allows us to mock things like scripts and cryptographic
+  -- primitives.
   }
   deriving (Show, Functor)
 
@@ -27,7 +33,7 @@ instance Applicative DelayedComp where
 instance Monad DelayedComp where
   (DelayedComp x d) >>= f =
     let (DelayedComp x' d') = f x
-    in DelayedComp x' (addMaybes d d')
+     in DelayedComp x' (addMaybes d d')
   (DelayedComp _x d) >> (DelayedComp x' d') = DelayedComp x' (addMaybes d d')
 
 -- | A computation that produces a given value after a given time.
@@ -39,7 +45,7 @@ promptComp :: a -> DelayedComp a
 promptComp x = DelayedComp x Nothing
 
 -- | Run a computation (i.e., wait for the proper time, and yield the result).
-runComp :: MonadTimer m => DelayedComp a -> m a
+runComp :: (MonadTimer m, MonadDelay m) => DelayedComp a -> m a
 runComp (DelayedComp x (Just d)) = threadDelay d >> pure x
 runComp (DelayedComp x Nothing) = pure x
 

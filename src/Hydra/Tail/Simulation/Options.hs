@@ -117,33 +117,33 @@ filepathArgument =
       <> help "Filepath to write to / read from comma-separated events."
 
 data PrepareOptions = PrepareOptions
-  { -- | Total number of client
-    numberOfClients :: Integer
-  , -- | Duration of the simulation, in slots.
-    duration :: SlotNo
-  , -- | Options specific to each 'Client'
-    clientOptions :: ClientOptions
+  { numberOfClients :: Integer
+  -- ^ Total number of client
+  , duration :: SlotNo
+  -- ^ Duration of the simulation, in slots.
+  , clientOptions :: ClientOptions
+  -- ^ Options specific to each 'Client'
   }
   deriving (Generic, Show)
 
 data RunOptions = RunOptions
-  { -- | Slot length
-    slotLength :: DiffTime
-  , -- | payment window parameter (a.k.a W), that is, the budget of each client before needing a snapshot.
-    paymentWindow :: Maybe Lovelace
-  , -- | Number of slots needed for a snapshot to be settled.
-    settlementDelay :: SlotNo
-  , -- | If and when to pro-actively snapshot as a client, e.g. 0.8 would
-    -- snapshot when reaching 80% of the window budget.
-    proactiveSnapshot :: Maybe Double
-  , -- | Fraction of the window budget which fixes the maximum admissible payment. 0.5 means that we discard any transaction which is bigger than half the payment window.
-    paymentCutOff :: Double
-  , -- | Whether each client should use two wallets with independent snapshot cycles
-    enableBackupWallet :: Bool
-  , -- | Whether to print progress and additional information.
-    verbosity :: Verbosity
-  , -- | Options specific to the 'Server'
-    serverOptions :: ServerOptions
+  { slotLength :: DiffTime
+  -- ^ Slot length
+  , paymentWindow :: Maybe Lovelace
+  -- ^ payment window parameter (a.k.a W), that is, the budget of each client before needing a snapshot.
+  , settlementDelay :: SlotNo
+  -- ^ Number of slots needed for a snapshot to be settled.
+  , proactiveSnapshot :: Maybe Double
+  -- ^ If and when to pro-actively snapshot as a client, e.g. 0.8 would
+  -- snapshot when reaching 80% of the window budget.
+  , paymentCutOff :: Double
+  -- ^ Fraction of the window budget which fixes the maximum admissible payment. 0.5 means that we discard any transaction which is bigger than half the payment window.
+  , enableBackupWallet :: Bool
+  -- ^ Whether each client should use two wallets with independent snapshot cycles
+  , verbosity :: Verbosity
+  -- ^ Whether to print progress and additional information.
+  , serverOptions :: ServerOptions
+  -- ^ Options specific to the 'Server'
   }
   deriving (Generic, Show)
 
@@ -273,12 +273,12 @@ clientOptionsOption =
     <$> clientSubmitLikelihoodOption
 
 data ServerOptions = ServerOptions
-  { -- | 'Server' region
-    region :: AWSCenters
-  , -- | 'Server' network read capacity, in KBits/s
-    readCapacity :: NetworkCapacity
-  , -- | 'Server' network write capacity, in KBits/s
-    writeCapacity :: NetworkCapacity
+  { region :: AWSCenters
+  -- ^ 'Server' region
+  , readCapacity :: NetworkCapacity
+  -- ^ 'Server' network read capacity, in KBits/s
+  , writeCapacity :: NetworkCapacity
+  -- ^ 'Server' network write capacity, in KBits/s
   }
   deriving (Generic, Show)
 
@@ -304,10 +304,10 @@ serverWriteCapacityOption =
   networkCapacityOption Write (100 * 1024)
 
 data ClientOptions = ClientOptions
-  { -- | Likelihood of a 'Client' to submit a transaction at the current slot.
-    -- This models the behavior of clients that only go online to check on the
-    -- server state but not necessarily submit any transactions.
-    submitLikelihood :: Rational
+  { submitLikelihood :: Rational
+  -- ^ Likelihood of a 'Client' to submit a transaction at the current slot.
+  -- This models the behavior of clients that only go online to check on the
+  -- server state but not necessarily submit any transactions.
   }
   deriving (Generic, Show)
 
@@ -340,10 +340,10 @@ discardEdgesOption =
 --
 
 data NetworkCapacity = NetworkCapacity
-  { -- | in KBits/s
-    rate :: Integer
-  , -- | Measure time needed to transfer a payload of the given 'Size'
-    capacity :: Size -> DiffTime
+  { rate :: Integer
+  -- ^ in KBits/s
+  , capacity :: Size -> DiffTime
+  -- ^ Measure time needed to transfer a payload of the given 'Size'
   }
   deriving (Generic)
 

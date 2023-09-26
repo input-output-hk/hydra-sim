@@ -10,37 +10,37 @@ import Test.QuickCheck
 
 spec :: Spec
 spec = describe "Hydra Simulation" $ do
-    describe "Simple Protocol w/o Conflicts" $ do
-        it "confirms all transactions" $ property confirmsAllTransactions
-    describe "Coordinated Vanilla Protocol" $ do
-        it "confirms all transactions through snapshots" $
-            pendingWith "TODO: find the right property for coordinated protocol"
+  describe "Simple Protocol w/o Conflicts" $ do
+    it "confirms all transactions" $ property confirmsAllTransactions
+  describe "Coordinated Vanilla Protocol" $ do
+    it "confirms all transactions through snapshots" $
+      pendingWith "TODO: find the right property for coordinated protocol"
 
 confirmsAllTransactions ::
-    Sizing -> Property
+  Sizing -> Property
 confirmsAllTransactions (Sizing numTxs snapSize) =
-    let capacity = 10 :: Integer
-        traceRun = runSimulation defaultOptions{numberTxs = fromInteger numTxs, snapStrategy = SnapAfter (fromInteger snapSize)} capacity
-        fullTrace = selectTraceHydraEvents DontShowDebugMessages traceRun
-        confirmedTxsInSnapshots = sum $ txsInConfSnap <$> confirmedSnapshots fullTrace
-        allConfirmedTxs = length $ confirmedTxs fullTrace
-     in collect ("Snapshot size: " <> show snapSize) $
-            allConfirmedTxs == fromInteger (numTxs * 3) && confirmedTxsInSnapshots <= allConfirmedTxs
+  let capacity = 10 :: Integer
+      traceRun = runSimulation defaultOptions{numberTxs = fromInteger numTxs, snapStrategy = SnapAfter (fromInteger snapSize)} capacity
+      fullTrace = selectTraceHydraEvents DontShowDebugMessages traceRun
+      confirmedTxsInSnapshots = sum $ txsInConfSnap <$> confirmedSnapshots fullTrace
+      allConfirmedTxs = length $ confirmedTxs fullTrace
+   in collect ("Snapshot size: " <> show snapSize) $
+        allConfirmedTxs == fromInteger (numTxs * 3) && confirmedTxsInSnapshots <= allConfirmedTxs
 
 confirmsAllTransactionsWithSnapshots ::
-    Sizing -> Property
+  Sizing -> Property
 confirmsAllTransactionsWithSnapshots (Sizing numTxs snapSize) =
-    let capacity = 10 :: Integer
-        traceRun =
-            runSimulation
-                defaultOptions
-                    { numberTxs = fromInteger numTxs
-                    , snapStrategy = SnapAfter (fromInteger snapSize)
-                    , protocolFlavor = CoordinatedVanilla
-                    }
-                capacity
-        fullTrace = selectTraceHydraEvents DontShowDebugMessages traceRun
-        confirmedTxsInSnapshots = sum $ txsInConfSnap <$> confirmedSnapshots fullTrace
-     in counterexample ("Ran: " <> ", confirmedTxsInSnapshots: " <> show confirmedTxsInSnapshots <> ", trace: " <> show fullTrace) $
-            collect ("Snapshot size: " <> show snapSize) $
-                fromInteger (numTxs * 3) == confirmedTxsInSnapshots
+  let capacity = 10 :: Integer
+      traceRun =
+        runSimulation
+          defaultOptions
+            { numberTxs = fromInteger numTxs
+            , snapStrategy = SnapAfter (fromInteger snapSize)
+            , protocolFlavor = CoordinatedVanilla
+            }
+          capacity
+      fullTrace = selectTraceHydraEvents DontShowDebugMessages traceRun
+      confirmedTxsInSnapshots = sum $ txsInConfSnap <$> confirmedSnapshots fullTrace
+   in counterexample ("Ran: " <> ", confirmedTxsInSnapshots: " <> show confirmedTxsInSnapshots <> ", trace: " <> show fullTrace) $
+        collect ("Snapshot size: " <> show snapSize) $
+          fromInteger (numTxs * 3) == confirmedTxsInSnapshots

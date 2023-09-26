@@ -1,35 +1,44 @@
-{-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
-module HydraSim.Tx.Class
-  ( Tx (..)
-  , applyValidTxs
-  ) where
+{-# LANGUAGE TypeFamilies #-}
 
+module HydraSim.Tx.Class (
+  Tx (..),
+  applyValidTxs,
+) where
 
-import           Data.Kind (Type)
-import           Data.List (foldl')
-import           Data.Set (Set)
+import Data.Kind (Type)
+import Data.List (foldl')
+import Data.Set (Set)
 import qualified Data.Set as Set
-import           HydraSim.DelayedComp
-import           HydraSim.Sized
+import HydraSim.DelayedComp
+import HydraSim.Sized
 
 -- | Abstract transaction.
-class (Eq (TxRef tx), Ord (TxRef tx), Show (TxRef tx),
-       Eq (TxInput tx), Ord (TxInput tx), Show (TxInput tx),
-       Show tx,
-       Sized (TxRef tx), Sized tx
-      )
-  => Tx tx where
-
+class
+  ( Eq (TxRef tx)
+  , Ord (TxRef tx)
+  , Show (TxRef tx)
+  , Eq (TxInput tx)
+  , Ord (TxInput tx)
+  , Show (TxInput tx)
+  , Show tx
+  , Sized (TxRef tx)
+  , Sized tx
+  ) =>
+  Tx tx
+  where
   -- | Transaction reference (i.e., hash)
   data TxRef tx :: Type
+
   txRef :: tx -> TxRef tx
 
   -- | Type of transaction inputs and outputs
   data TxInput tx :: Type
+
   -- | Inputs consumed by this transaction
   txi :: tx -> Set (TxInput tx)
+
   -- | Outputs created by this transaction
   txo :: tx -> Set (TxInput tx)
 
@@ -51,9 +60,10 @@ class (Eq (TxRef tx), Ord (TxRef tx), Show (TxRef tx),
   -- | Apply a transaction to a utxo set (including validating the transaction
   -- against that utxo set).
   txApply :: Set (TxInput tx) -> tx -> DelayedComp (Maybe (Set (TxInput tx)))
-  txApply utxo tx = txValidate utxo tx >>= \case
-    False -> return Nothing
-    True -> return . Just $ txApplyValid utxo tx
+  txApply utxo tx =
+    txValidate utxo tx >>= \case
+      False -> return Nothing
+      True -> return . Just $ txApplyValid utxo tx
 
   -- | Sort transactions respecting partial order of inputs/outputs
   txSort :: [tx] -> [tx]

@@ -80,8 +80,8 @@ writeEvents :: FilePath -> [Event] -> IO ()
 writeEvents filepath events = do
   TIO.writeFile filepath $
     T.unlines $
-      "slot,clientId,event,size,amount,recipients" :
-      (eventToCsv <$> events)
+      "slot,clientId,event,size,amount,recipients"
+        : (eventToCsv <$> events)
 
 readEventsThrow :: FilePath -> IO [Event]
 readEventsThrow filepath = do
@@ -151,8 +151,8 @@ writeTransactions :: FilePath -> Transactions -> IO ()
 writeTransactions filepath transactions = do
   TIO.writeFile filepath $
     T.unlines $
-      "slot,ref,confirmationTime" :
-      mapMaybe toCsv (Map.toList transactions)
+      "slot,ref,confirmationTime"
+        : mapMaybe toCsv (Map.toList transactions)
  where
   toCsv :: (TxRef MockTx, [DiffTime]) -> Maybe Text
   toCsv (TxRef{slot, ref}, [end, start]) =

@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE BangPatterns #-}
 module HydraSim.HeadNode
@@ -10,22 +9,51 @@ module HydraSim.HeadNode
   ) where
 
 import           Control.Monad (forever, void)
-import           Control.Monad.Class.MonadAsync
+import Control.Monad.Class.MonadAsync
+    ( MonadAsync(async, concurrently) )
 import           Control.Monad.Class.MonadFork (myThreadId, labelThread)
-import           Control.Monad.Class.MonadSTM
-import           Control.Monad.Class.MonadThrow
-import           Control.Monad.Class.MonadTimer
-import           Control.Tracer
+import Control.Concurrent.Class.MonadSTM
+    ( MonadSTM(..), MonadSTM(TMVar) )
+import Control.Monad.Class.MonadThrow ( MonadThrow )
+import Control.Monad.Class.MonadTimer ( MonadTimer )
+import Control.Tracer
+    ( Contravariant(contramap), Tracer, traceWith )
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
-import           HydraSim.Channel
-import           HydraSim.DelayedComp
-import           HydraSim.MSig.Mock
-import           HydraSim.Multiplexer
-import           HydraSim.Sized
-import           HydraSim.Trace
-import           HydraSim.Tx.Class
-import           HydraSim.Types
+import HydraSim.Channel ( Channel )
+import HydraSim.DelayedComp ( runComp )
+import HydraSim.MSig.Mock ( VKey(VKey) )
+import HydraSim.Multiplexer
+    ( connect,
+      getMessage,
+      multicast,
+      newMultiplexer,
+      reenqueue,
+      sendTo,
+      sendToSelf,
+      startMultiplexer,
+      MessageEdge,
+      Multiplexer )
+import HydraSim.Sized ( Size )
+import HydraSim.Trace ( TraceHydraEvent(..) )
+import HydraSim.Tx.Class ( Tx(txRef) )
+import HydraSim.Types
+    ( hStateEmpty,
+      nextSn,
+      noSnapN,
+      Decision(DecInvalid, DecApply, DecWait),
+      HState(hsVKs, hsTxsInflight, hsSnapNConf, hsTxsConf),
+      HeadProtocol(NewSn, New),
+      NodeConf(hcProtocolHandler, hcTxSendStrategy, hcSnapshotStrategy,
+               hcLeaderFun, hcNodeId),
+      NodeId(NodeId),
+      SendMessage(..),
+      SnapN,
+      SnapStrategy(SnapAfter, NoSnapshots),
+      TraceProtocolEvent(TPInvalidTransition),
+      TxSendStrategy(SendTxs, SendNoTx, SendSingleTx, SendTxsDumb) )
+import Data.Time (DiffTime)
+import Control.Monad.Class.MonadTimer.SI (MonadDelay)
 
 -- | A node in the head protocol.
 data Tx tx => HeadNode m tx = HeadNode {
@@ -50,7 +78,7 @@ newNode
   -- ^ Read capacity of the node's network device.
   -> m (HeadNode m tx)
 newNode conf writeCapacity readCapacity = do
-  state <- newTMVarM $ hStateEmpty (hcNodeId conf)
+  state <- newTMVarIO $ hStateEmpty (hcNodeId conf)
   multiplexer <- newMultiplexer
                  (show . hcNodeId $ conf)
                  1000 1000
@@ -93,7 +121,7 @@ connectNodes createChannels node node' = do
 -- specified in the node config.
 startNode
   :: (MonadSTM m, MonadTimer m, MonadAsync m, MonadThrow m,
-       Tx tx)
+       Tx tx, MonadDelay m)
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 startNode tracer hn = void $
@@ -136,7 +164,7 @@ clientMessage tracer hn = sendToSelf mpTracer (hnMultiplexer hn) (hcNodeId (hnCo
 listener
   :: forall m tx .
      (MonadSTM m, MonadTimer m, MonadAsync m,
-      Tx tx)
+      Tx tx, MonadDelay m)
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 listener tracer hn = forever $

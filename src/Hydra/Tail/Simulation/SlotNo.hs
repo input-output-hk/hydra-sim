@@ -1,19 +1,19 @@
 {-# LANGUAGE DerivingVia #-}
 
 module Hydra.Tail.Simulation.SlotNo (
-    SlotNo (..),
+  SlotNo (..),
 ) where
 
 import Prelude
 
 import GHC.Generics (
-    Generic,
+  Generic,
  )
 import Quiet (
-    Quiet (..),
+  Quiet (..),
  )
 
 newtype SlotNo = SlotNo {unSlotNo :: Integer}
-    deriving stock (Eq, Ord, Generic)
-    deriving (Show) via Quiet SlotNo
-    deriving (Num, Enum) via Integer
+  deriving stock (Eq, Ord, Generic)
+  deriving (Show) via Quiet SlotNo
+  deriving (Num, Enum) via Integer
