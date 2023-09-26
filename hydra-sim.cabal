@@ -103,7 +103,7 @@ library
                      , contra-tracer
                      , generic-lens
                      , io-sim
-                     , io-sim-classes
+                     , io-classes
                      , optparse-applicative
                      , pretty-simple
                      , quiet
@@ -133,7 +133,7 @@ executable hydra-head-simulation
                      , directory
                      , hydra-sim -any
                      , io-sim
-                     , io-sim-classes
+                     , io-classes
                      , optparse-applicative
                      , time
   ghc-options:         -O2 -threaded -rtsopts
@@ -152,7 +152,7 @@ test-suite tests
     , hspec
     , hydra-sim -any
     , QuickCheck -any
-    , io-sim-classes -any
+    , io-classes -any
     , io-sim -any
   build-tool-depends:
     hspec-discover:hspec-discover
