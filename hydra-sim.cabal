@@ -136,6 +136,7 @@ executable hydra-head-simulation
                      , io-sim
                      , io-classes
                      , optparse-applicative
+                     , si-timers
                      , time
   ghc-options:         -O2 -threaded -rtsopts
 
@@ -153,7 +154,6 @@ test-suite tests
     , hspec
     , hydra-sim -any
     , QuickCheck -any
-    , io-classes -any
     , io-sim -any
     , si-timers
   build-tool-depends:

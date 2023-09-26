@@ -94,7 +94,7 @@ newNode conf writeCapacity readCapacity = do
 
 -- | Connect two nodes.
 connectNodes
-  :: forall m tx . (MonadAsync m, MonadTimer m,
+  :: forall m tx . (MonadAsync m,
       Tx tx)
   => m (Channel m (MessageEdge (HeadProtocol tx)),
         Channel m (MessageEdge (HeadProtocol tx)))
@@ -120,9 +120,9 @@ connectNodes createChannels node node' = do
 -- for sending transactions and making snapshots, according to the strategies
 -- specified in the node config.
 startNode
-  :: (MonadSTM m, MonadTimer m, MonadAsync m, MonadThrow m,
+  :: ( MonadTimer m, MonadAsync m, MonadThrow m,
        Tx tx, MonadDelay m)
-  => Tracer m (TraceHydraEvent tx)
+  =>Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 startNode tracer hn = void $
   concurrently (labelThisThread nodeLabel >> listener tracer hn) $
@@ -163,9 +163,9 @@ clientMessage tracer hn = sendToSelf mpTracer (hnMultiplexer hn) (hcNodeId (hnCo
 -- | This is for the actual logic of the node, processing incoming messages.
 listener
   :: forall m tx .
-     (MonadSTM m, MonadTimer m, MonadAsync m,
+     ( MonadTimer m, MonadAsync m,
       Tx tx, MonadDelay m)
-  => Tracer m (TraceHydraEvent tx)
+  =>Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 listener tracer hn = forever $
   atomically (getMessage mplex) >>= uncurry applyMessage
@@ -240,7 +240,7 @@ txSender tracer hn = case hcTxSendStrategy (hnConf hn) of
 
 snDaemon
   :: forall m tx .
-     (MonadSTM m, MonadAsync m, Tx tx)
+     (MonadSTM m, Tx tx)
   => Tracer m (TraceHydraEvent tx)
   -> HeadNode m tx -> m ()
 snDaemon tracer hn = case hcSnapshotStrategy conf of

@@ -44,17 +44,12 @@ import Control.Monad.Class.MonadThrow (
   MonadThrow,
   throwIO,
  )
-import Control.Monad.Class.MonadTime (
-  MonadTime,
- )
 import Control.Monad.Class.MonadTimer (
   MonadTimer,
-  threadDelay,
  )
 import Control.Monad.IOSim (
   IOSim,
   SimTrace,
-  Trace (..),
   runSimTrace,
  )
 import qualified Control.Monad.IOSim as IOSim
@@ -94,10 +89,6 @@ import Data.Maybe (
  )
 import Data.Ratio (
   (%),
- )
-import Data.Time.Clock (
-  DiffTime,
-  secondsToDiffTime,
  )
 import GHC.Generics (
   Generic,
@@ -168,6 +159,8 @@ import System.Random (
   newStdGen,
   randomR,
  )
+import Control.Monad.Class.MonadTimer.SI (MonadDelay(..))
+import Data.Time (DiffTime, secondsToDiffTime)
 
 --
 -- Simulation
@@ -333,7 +326,7 @@ newServer identifier clientIds ServerOptions{region, writeCapacity, readCapacity
 
 runServer ::
   forall m.
-  (MonadAsync m, MonadTimer m, MonadThrow m) =>
+  (MonadAsync m, MonadTimer m, MonadThrow m, MonadDelay m) =>
   Tracer m TraceServer ->
   RunOptions ->
   Server m ->
@@ -648,7 +641,7 @@ newClient identifier = do
 -- might be delayed due to the blocking nature of snapshotting.
 runClient ::
   forall m.
-  (MonadAsync m, MonadTimer m, MonadThrow m) =>
+  (MonadAsync m, MonadTimer m, MonadThrow m, MonadDelay m) =>
   Tracer m TraceClient ->
   ServerId ->
   RunOptions ->
@@ -773,7 +766,7 @@ data SimulationSummary = SimulationSummary
 
 runEventLoop ::
   forall m.
-  (MonadAsync m, MonadTimer m) =>
+  (MonadAsync m, MonadDelay m) =>
   Tracer m TraceEventLoop ->
   RunOptions ->
   ServerId ->
@@ -901,7 +894,7 @@ pickRecipient (NodeId me) n = do
     else pure $ NodeId (fromIntegral i)
 
 connectClient ::
-  (MonadAsync m, MonadTimer m, MonadTime m) =>
+  (MonadAsync m, MonadDelay m) =>
   Client m ->
   Server m ->
   m ()
