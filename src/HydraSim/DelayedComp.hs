@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# OPTIONS_GHC -Wno-noncanonical-monad-instances #-}
 
 module HydraSim.DelayedComp (
   DelayedComp (..),

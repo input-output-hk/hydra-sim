@@ -175,7 +175,7 @@ newMultiplexer label outBufferSize inBufferSize writeCapacity readCapacity = do
 
 -- | Connect two nodes.
 connect ::
-  (MonadSTM m, MonadTimer m) =>
+  (MonadSTM m) =>
   -- | Creates a pair of connected channels.
   --
   -- The channels are responsible for adding the delay caused by the messages
@@ -198,14 +198,12 @@ connect createChannels (nodeId, mp) (nodeId', mp') = do
 -- 'multicast', 'sendToSelf', and received by reading from the 'mpInQueue' via
 -- 'getMessage'.
 startMultiplexer ::
-  ( MonadSTM m
-  , MonadThrow m
+  ( MonadThrow m
   , MonadTimer m
   , MonadAsync m
   , Sized a
   , MonadDelay m
-  ) =>
-  Tracer m (TraceMultiplexer a) ->
+  ) =>Tracer m (TraceMultiplexer a) ->
   Multiplexer m a ->
   m ()
 startMultiplexer tracer mp =
@@ -284,8 +282,7 @@ sendToSelf tracer mp nodeId ms = do
 -- are currently waiting. Before getting the next message from the queue, the
 -- node would check whether any of the waiting messages can be processed.
 reenqueue ::
-  (MonadSTM m, MonadAsync m, MonadDelay m) =>
-  Tracer m (TraceMultiplexer a) ->
+  ( MonadAsync m, MonadDelay m) =>Tracer m (TraceMultiplexer a) ->
   Multiplexer m a ->
   (NodeId, a) ->
   m ()
@@ -317,7 +314,6 @@ getMessage mp = readTBQueue $ mpInQueue mp
 messageSender ::
   ( MonadSTM m
   , MonadThrow m
-  , MonadTimer m
   , Sized a
   , MonadDelay m
   ) =>
@@ -333,7 +329,6 @@ messageSender tracer mp = forever $ do
 sendMessage ::
   ( MonadSTM m
   , MonadThrow m
-  , MonadTimer m
   , Sized a
   , MonadDelay m
   ) =>
@@ -359,7 +354,6 @@ sendMessage tracer mp peer ms = do
 messageReceiver ::
   forall m a.
   ( MonadSTM m
-  , MonadTimer m
   , MonadDelay m
   ) =>
   Tracer m (TraceMultiplexer a) ->

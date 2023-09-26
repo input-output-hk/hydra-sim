@@ -1,20 +1,40 @@
 module Main where
 
 import Control.Monad (forM_, unless, when)
-import Control.Monad.Class.MonadTime
+import Control.Monad.Class.MonadTime ()
 import Control.Monad.IOSim (ThreadLabel)
 import Data.List (intercalate)
-import Data.Maybe
+import Data.Maybe ( fromMaybe )
 import HydraSim.Analyse
+    ( analyseRun,
+      diffTimeToSeconds,
+      tps,
+      SnConfirmed(..),
+      TxConfirmed(..) )
 import HydraSim.Examples.Baselines
-import HydraSim.Examples.Channels
+    ( baselineTPS,
+      findIntersection,
+      minConfTime,
+      tpsTotalBound,
+      Baseline(Baseline, blBandwidth, blScenario, blLocations,
+               blAsigTimes, blTxType, blConc, blSnapshots),
+      Concurrency(UnlimitedConc, FiniteConc),
+      Scenario(HydraUnlimited, SpritesUnlimited, FullTrust) )
+import HydraSim.Examples.Channels ( AWSCenters )
 import HydraSim.Options
-import HydraSim.Run
-import HydraSim.Types
-import Numeric.Natural
+    ( cli,
+      Options(regions, output, asigTime, baselineSnapshots,
+              networkCapacity, verbosity, discardEdges, txType, concurrency) )
+import HydraSim.Run ( runSimulation, secondsToDiffTimeTriplet )
+import HydraSim.Types ( SnapStrategy(SnapAfter, NoSnapshots) )
+import Numeric.Natural ( Natural )
 import Options.Applicative
+    ( (<**>), fullDesc, info, progDesc, execParser, helper )
 import System.Directory (doesFileExist)
 import System.IO
+    ( hPutStrLn, withFile, Handle, IOMode(WriteMode, AppendMode) )
+import Data.Time(DiffTime)
+import Control.Monad.Class.MonadTime.SI (Time(..), diffTime)
 
 data Datum = Datum
   { dCapacity :: Natural
@@ -145,7 +165,7 @@ writeCSV h opts capacity txs snaps = do
         , dObject = "tps"
         , dValue = show $ tps txs
         }
-  forM_ (drop (discardEdges opts) . reverse . drop (discardEdges opts) $ txs) $ \tx -> case tx of
+  forM_ (drop (discardEdges opts) . reverse . drop (discardEdges opts) $ txs) $ \case
     TxConfirmed node t dt ->
       hPutStrLn h $
         csvLine
@@ -159,7 +179,7 @@ writeCSV h opts capacity txs snaps = do
             , dValue = showt dt
             }
     TxUnconfirmed _ _ -> return ()
-  forM_ snaps $ \snap -> case snap of
+  forM_ snaps $ \case
     SnConfirmed node size t dt ->
       hPutStrLn h $
         csvLine

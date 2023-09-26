@@ -1,8 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE OverloadedLabels #-}
-{-# LANGUAGE TypeApplications #-}
 {-# OPTIONS_GHC -Wno-name-shadowing #-}
 
 module Hydra.Tail.Simulation.Analyze (
@@ -19,7 +17,7 @@ import Prelude
 
 import Control.Monad.IOSim (
   ThreadLabel,
-  Trace (..),
+  SimTrace,
  )
 import Data.Functor (
   ($>),
@@ -74,6 +72,7 @@ import HydraSim.Tx.Class (
 import Quiet (
   Quiet (..),
  )
+import Control.Monad.Class.MonadTime.SI (Time (..))
 
 data FractionsOfSettlementTime = FractionsOfSettlementTime
   { tenth :: Double
@@ -119,7 +118,7 @@ analyzeSimulation ::
   Monad m =>
   AnalyzeOptions ->
   (SlotNo -> Maybe Analyze -> m ()) ->
-  Trace () ->
+  SimTrace () ->
   m (Transactions, Retries, Snapshots, NumberOfSubmittedTransactions)
 analyzeSimulation options notify trace = do
   (confirmations, retries, snapshots, scheduledTxs, _) <-

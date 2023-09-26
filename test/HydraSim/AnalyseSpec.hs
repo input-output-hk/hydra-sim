@@ -2,10 +2,14 @@
 
 module HydraSim.AnalyseSpec where
 
-import Control.Monad.Class.MonadTime (Time (Time))
+import Control.Monad.Class.MonadTime.SI (Time (Time))
 import Control.Monad.IOSim (ThreadLabel)
 import HydraSim.Analyse
-import Test.Hspec
+    ( avgConfTime,
+      avgSnapSize,
+      SnConfirmed(SnUnconfirmed),
+      TxConfirmed(TxUnconfirmed) )
+import Test.Hspec ( describe, it, shouldBe, Spec )
 
 spec :: Spec
 spec = describe "Analyse Simulation" $ do
